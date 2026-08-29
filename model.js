@@ -28,6 +28,13 @@
 
   announce('loading');
 
+  // onnxruntime-web 이 안 실려 있으면 모델을 쓸 수 없다. 조용히 규칙 기반으로 돌아간다.
+  if (typeof ort === 'undefined') {
+    announce('failed', 'onnxruntime-web 을 불러오지 못했습니다. 인터넷 연결이나 CDN 차단을 확인하세요.');
+    console.warn('onnxruntime-web 이 없습니다. 규칙 기반 AI로 둡니다.');
+    return;
+  }
+
   function session() {
     if (!sessionPromise) {
       sessionPromise = ort.InferenceSession.create(MODEL_URL, {
