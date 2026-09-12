@@ -58,12 +58,13 @@
     const tensor = new ort.Tensor('float32', data, [games.length, N_PLANES, n, n]);
     const out = await sess.run({ board: tensor });
     return {
-      policy: out.policy.data,
-      value: out.value.data,
+      policy: out.policy.data,          // (B, n*n+1)
+      value: out.value.data,            // (B,)
       stride: n * n + 1,
     };
   }
 
+  /** 둘 수 있는 자리만 남긴 확률 분포. */
   function legalProbs(logits, game, offset, stride) {
     const n = game.size;
     const endIndex = n * n;
@@ -86,6 +87,8 @@
     return probs;
   }
 
+  /** 지금 두면 곧바로 6목이 되는 자리. 없으면 -1.
+      탐색에 맡기지 않는다. 이기는 수를 놓치는 일만은 없어야 한다. */
   function findImmediateWin(game) {
     if (!game.canPlace()) return -1;
     const { best } = threatGrids(game, game.current);
@@ -106,10 +109,13 @@
     return game.winner === rootColor ? 1 : -1;
   }
 
+  /** policy 상위 후보에 놓치면 안 되는 전술 후보를 합친다.
+      - 상대 즉시승은 완전 강제 방어
+      - fork 공격/방어가 보이면 END_TURN 금지
+      - 평온한 국면에서만 policy 상위 + END_TURN 허용 */
   function candidateActions(game, probs, width) {
     const n = game.size;
     const endIndex = n * n;
-    const chosen = new Set([endIndex]);
 
     if (!game.canPlace()) return [endIndex];
 
@@ -118,20 +124,44 @@
       if (game.board[i] === 0) empties.push(i);
     }
     empties.sort((a, b) => probs[b] - probs[a]);
-    for (const a of empties.slice(0, width)) chosen.add(a);
 
     const need = game.config.winLength;
     const foe = game.current === BLACK ? WHITE : BLACK;
     const foeThreat = threatGrids(game, foe);
     const ownThreat = threatGrids(game, game.current);
 
+    const mustBlocks = [];
+    const foeForks = [];
+    const ownForks = [];
+
     for (const i of empties) {
-      const mustBlock = foeThreat.best[i] >= need - 1;
-      const foeFork = foeThreat.forks4[i] >= 2 || foeThreat.forks3[i] >= 2;
-      const ownFork = ownThreat.forks4[i] >= 2 || ownThreat.forks3[i] >= 2;
-      if (mustBlock || foeFork || ownFork) chosen.add(i);
+      if (foeThreat.best[i] >= need - 1) {
+        mustBlocks.push(i);
+        continue;
+      }
+      if (foeThreat.forks4[i] >= 2 || foeThreat.forks3[i] >= 2) foeForks.push(i);
+      if (ownThreat.forks4[i] >= 2 || ownThreat.forks3[i] >= 2) ownForks.push(i);
     }
 
+    // 상대가 다음 한 수로 끝낼 수 있으면 다른 선택지는 없다.
+    // END_TURN도 허용하지 않고, 반드시 막는 수들끼리만 가치 탐색한다.
+    if (mustBlocks.length) {
+      return mustBlocks.sort((a, b) => probs[b] - probs[a]);
+    }
+
+    // 즉시패는 아니어도 fork 공격/방어가 이미 보이는 국면에서는
+    // 돌을 쌓으며 턴을 넘기지 않는다. 전술 후보를 반드시 포함시키고,
+    // policy 상위 일부도 함께 보아 가치 헤드가 더 좋은 전술 순서를 고르게 한다.
+    if (foeForks.length || ownForks.length) {
+      const tactical = new Set([...foeForks, ...ownForks]);
+      const policyAllowance = Math.max(2, Math.floor(width / 2));
+      for (const a of empties.slice(0, policyAllowance)) tactical.add(a);
+      return [...tactical].sort((a, b) => probs[b] - probs[a]);
+    }
+
+    // 평온한 국면에서만 돌을 모으는 선택(END_TURN)을 허용한다.
+    const chosen = new Set(empties.slice(0, width));
+    chosen.add(endIndex);
     return [...chosen].sort((a, b) => {
       if (a === endIndex) return 1;
       if (b === endIndex) return -1;
@@ -139,6 +169,7 @@
     });
   }
 
+  /** 온도에 따라 하나를 고른다. 0이면 언제나 최선. */
   function sample(probs, stride, temperature, rng = Math.random) {
     if (!(temperature > 0)) {
       let best = 0;
@@ -160,6 +191,10 @@
     return stride - 1;
   }
 
+  /** 후보마다 한 수 놓아보고 가치로 고른다.
+      어려움에서는 1-ply 평가 상위 DEEP_ROOTS개만 다시 DEEP_WIDTH갈래로 펼친다.
+      자식에서도 같은 사람이 계속 두는 경우에는 최대화하고, 턴이 넘어가 상대가 두는
+      경우에는 최소화한다. 이 게임의 한 턴 2~3연속 착수도 자연스럽게 읽힌다. */
   async function pickWithLookahead(game, probs, width, evaluateFn, deep = false) {
     const n = game.size;
     const rootColor = game.current;
@@ -263,12 +298,13 @@
     return actions[best];
   }
 
+  /** 한 턴 분량의 착수 목록. 빈 배열이면 이번 턴은 쉬고 돌을 모은다는 뜻. */
   async function planTurnWithModel(game, level, evaluateFn) {
     const n = game.size;
     const endIndex = n * n;
     const temperature = level.temperature || 0;
     const width = level.lookahead || 0;
-    const deep = width >= 6;
+    const deep = width >= 6;                    // 현재 난이도 설정에서 '어려움'만 2-ply
 
     const sim = game.clone();
     const moves = [];
@@ -289,7 +325,7 @@
         ? await pickWithLookahead(sim, probs, width, evaluateFn, deep)
         : sample(probs, stride, temperature);
 
-      if (index === endIndex) break;
+      if (index === endIndex) break;              // 턴을 마치기로 했다
       const r = Math.floor(index / n), c = index % n;
       sim.place(r, c);
       moves.push([r, c]);
