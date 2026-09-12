@@ -4,12 +4,11 @@
    1. 코랩 노트북에서 받은 sixmok.onnx 를 index.html 과 같은 폴더에 둔다.
    2. 그 폴더를 웹에 올리거나 간단한 서버로 연다 (file:// 로 열면 모델을 못 읽는다).
 
-   난이도에 따라 한 수 앞을 내다본다.
+   난이도에 따라 제한 탐색을 한다.
      쉬움   0갈래 — 신경망이 낸 수를 그대로 (온도만 높여 흔든다)
-     보통   3갈래
-     어려움 6갈래
-   후보마다 실제로 돌을 놓아본 뒤 가치 헤드로 평가한다. 한 번에 묶어 계산하므로
-   갈래를 늘려도 신경망 호출은 한 번만 늘어난다.
+     보통   3갈래 — 전술 필수 후보를 보존한 1-ply 가치 탐색
+     어려움 6갈래 — 필수 후보 + 상위 후보 일부를 한 단계 더 읽는 제한 2-ply 탐색
+   후보 국면은 가능한 한 배치로 묶어 가치 헤드로 평가한다.
 
    입력을 만드는 encodeState 는 engine.js 안에 있다. 학습에 쓴 encoding.py 와
    규격이 같아야 하며, parity_check 로 확인할 수 있다. */
@@ -20,6 +19,8 @@
   const MODEL_URL = 'sixmok.onnx';
   const MODEL_BOARD_SIZE = 19;   // 학습할 때 쓴 판 크기
   const POLICY_BLEND = 0.1;      // 가치가 비슷할 때 정책으로 우열을 가르는 정도
+  const DEEP_ROOTS = 4;          // 어려움에서 2-ply로 다시 펼칠 뿌리 후보 수
+  const DEEP_WIDTH = 3;          // 2-ply의 두 번째 단계 후보 폭
 
   let sessionPromise = null;
 
@@ -46,7 +47,7 @@
     return sessionPromise;
   }
 
-  /** 여러 국면을 한 번에 계산한다. 갈래를 늘려도 호출 횟수는 그대로다. */
+  /** 여러 국면을 한 번에 계산한다. 갈래를 늘려도 호출 횟수를 최소화한다. */
   async function evaluate(games) {
     const n = games[0].size;
     const planeSize = N_PLANES * n * n;
@@ -57,13 +58,12 @@
     const tensor = new ort.Tensor('float32', data, [games.length, N_PLANES, n, n]);
     const out = await sess.run({ board: tensor });
     return {
-      policy: out.policy.data,          // (B, n*n+1)
-      value: out.value.data,            // (B,)
+      policy: out.policy.data,
+      value: out.value.data,
       stride: n * n + 1,
     };
   }
 
-  /** 둘 수 있는 자리만 남긴 확률 분포. */
   function legalProbs(logits, game, offset, stride) {
     const n = game.size;
     const endIndex = n * n;
@@ -86,8 +86,6 @@
     return probs;
   }
 
-  /** 지금 두면 곧바로 6목이 되는 자리. 없으면 -1.
-      탐색에 맡기지 않는다. 이기는 수를 놓치는 일만은 없어야 한다. */
   function findImmediateWin(game) {
     if (!game.canPlace()) return -1;
     const { best } = threatGrids(game, game.current);
@@ -102,7 +100,45 @@
     return index === n * n ? END_TURN : [Math.floor(index / n), index % n];
   }
 
-  /** 온도에 따라 하나를 고른다. 0이면 언제나 최선. */
+  function rootValue(game, rootColor) {
+    if (!game.isOver) return null;
+    if (game.winner === null) return 0;
+    return game.winner === rootColor ? 1 : -1;
+  }
+
+  function candidateActions(game, probs, width) {
+    const n = game.size;
+    const endIndex = n * n;
+    const chosen = new Set([endIndex]);
+
+    if (!game.canPlace()) return [endIndex];
+
+    const empties = [];
+    for (let i = 0; i < endIndex; i++) {
+      if (game.board[i] === 0) empties.push(i);
+    }
+    empties.sort((a, b) => probs[b] - probs[a]);
+    for (const a of empties.slice(0, width)) chosen.add(a);
+
+    const need = game.config.winLength;
+    const foe = game.current === BLACK ? WHITE : BLACK;
+    const foeThreat = threatGrids(game, foe);
+    const ownThreat = threatGrids(game, game.current);
+
+    for (const i of empties) {
+      const mustBlock = foeThreat.best[i] >= need - 1;
+      const foeFork = foeThreat.forks4[i] >= 2 || foeThreat.forks3[i] >= 2;
+      const ownFork = ownThreat.forks4[i] >= 2 || ownThreat.forks3[i] >= 2;
+      if (mustBlock || foeFork || ownFork) chosen.add(i);
+    }
+
+    return [...chosen].sort((a, b) => {
+      if (a === endIndex) return 1;
+      if (b === endIndex) return -1;
+      return probs[b] - probs[a];
+    });
+  }
+
   function sample(probs, stride, temperature, rng = Math.random) {
     if (!(temperature > 0)) {
       let best = 0;
@@ -124,18 +160,10 @@
     return stride - 1;
   }
 
-  /** 후보마다 한 수 놓아보고 가치로 고른다.
-      돌을 놓아도 차례가 넘어가지 않으므로, 자식 국면의 가치는 대개 내 관점 그대로다.
-      턴을 마치는 갈래만 상대 관점이라 부호를 뒤집는다. */
-  async function pickWithLookahead(game, probs, width, evaluateFn) {
+  async function pickWithLookahead(game, probs, width, evaluateFn, deep = false) {
     const n = game.size;
-    const endIndex = n * n;
-
-    const empties = [];
-    for (let i = 0; i < endIndex; i++) if (game.board[i] === 0) empties.push(i);
-    empties.sort((a, b) => probs[b] - probs[a]);
-    const actions = empties.slice(0, width);
-    actions.push(endIndex);                       // 턴 마치기도 후보에 넣는다
+    const rootColor = game.current;
+    const actions = candidateActions(game, probs, width);
 
     const children = actions.map((a) => {
       const child = game.clone();
@@ -144,10 +172,12 @@
     });
 
     const scores = new Array(actions.length);
+    const childPolicies = new Array(actions.length);
     const pending = [], pendingAt = [];
     children.forEach((child, k) => {
-      if (child.isOver) {
-        scores[k] = child.winner === null ? 0 : (child.winner === game.current ? 1 : -1);
+      const terminal = rootValue(child, rootColor);
+      if (terminal !== null) {
+        scores[k] = terminal;
       } else {
         pending.push(child);
         pendingAt.push(k);
@@ -155,11 +185,73 @@
     });
 
     if (pending.length) {
-      const { value } = await evaluateFn(pending);
+      const { policy, value, stride } = await evaluateFn(pending);
       pendingAt.forEach((k, j) => {
+        const child = children[k];
         const v = value[j];
-        scores[k] = pending[j].current === game.current ? v : -v;
+        scores[k] = child.current === rootColor ? v : -v;
+        childPolicies[k] = legalProbs(policy, child, j * stride, stride);
       });
+    }
+
+    if (deep) {
+      const expandable = actions
+        .map((action, k) => ({ action, k, score: scores[k] + POLICY_BLEND * probs[action] }))
+        .filter(({ k }) => !children[k].isOver && childPolicies[k])
+        .sort((a, b) => b.score - a.score)
+        .slice(0, DEEP_ROOTS);
+
+      const leaves = [];
+      const leafMeta = [];
+
+      for (const { k } of expandable) {
+        const child = children[k];
+        const replyProbs = childPolicies[k];
+        const replies = candidateActions(child, replyProbs, DEEP_WIDTH);
+        for (const reply of replies) {
+          const leaf = child.clone();
+          leaf.play(toMove(reply, n));
+          leaves.push(leaf);
+          leafMeta.push({ parent: k, reply });
+        }
+      }
+
+      const leafScores = new Array(leaves.length);
+      const leafPending = [], leafPendingAt = [];
+      leaves.forEach((leaf, j) => {
+        const terminal = rootValue(leaf, rootColor);
+        if (terminal !== null) leafScores[j] = terminal;
+        else {
+          leafPending.push(leaf);
+          leafPendingAt.push(j);
+        }
+      });
+
+      if (leafPending.length) {
+        const { value } = await evaluateFn(leafPending);
+        leafPendingAt.forEach((j, p) => {
+          const leaf = leaves[j];
+          leafScores[j] = leaf.current === rootColor ? value[p] : -value[p];
+        });
+      }
+
+      for (const { k } of expandable) {
+        const child = children[k];
+        const candidates = [];
+        for (let j = 0; j < leafMeta.length; j++) {
+          if (leafMeta[j].parent !== k) continue;
+          const reply = leafMeta[j].reply;
+          const replyPrior = childPolicies[k][reply] || 0;
+          candidates.push(
+            leafScores[j] + (child.current === rootColor ? 1 : -1) * POLICY_BLEND * replyPrior
+          );
+        }
+        if (candidates.length) {
+          scores[k] = child.current === rootColor
+            ? Math.max(...candidates)
+            : Math.min(...candidates);
+        }
+      }
     }
 
     let best = 0;
@@ -171,12 +263,12 @@
     return actions[best];
   }
 
-  /** 한 턴 분량의 착수 목록. 빈 배열이면 이번 턴은 쉬고 돌을 모은다는 뜻. */
   async function planTurnWithModel(game, level, evaluateFn) {
     const n = game.size;
     const endIndex = n * n;
     const temperature = level.temperature || 0;
     const width = level.lookahead || 0;
+    const deep = width >= 6;
 
     const sim = game.clone();
     const moves = [];
@@ -194,10 +286,10 @@
       const probs = legalProbs(policy, sim, 0, stride);
 
       const index = width > 0
-        ? await pickWithLookahead(sim, probs, width, evaluateFn)
+        ? await pickWithLookahead(sim, probs, width, evaluateFn, deep)
         : sample(probs, stride, temperature);
 
-      if (index === endIndex) break;              // 턴을 마치기로 했다
+      if (index === endIndex) break;
       const r = Math.floor(index / n), c = index % n;
       sim.place(r, c);
       moves.push([r, c]);
@@ -228,6 +320,13 @@
     });
 
   if (typeof module !== 'undefined') {
-    module.exports = { planTurnWithModel, pickWithLookahead, legalProbs, sample, findImmediateWin };
+    module.exports = {
+      planTurnWithModel,
+      pickWithLookahead,
+      candidateActions,
+      legalProbs,
+      sample,
+      findImmediateWin,
+    };
   }
 })();
