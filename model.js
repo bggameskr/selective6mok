@@ -109,10 +109,50 @@
     return game.winner === rootColor ? 1 : -1;
   }
 
+  /** color가 현재/다음 자기 턴에 연속으로 둘 수 있는 최대 돌 수. */
+  function availablePlacements(game, color) {
+    if (color === game.current) {
+      return Math.max(
+        0,
+        Math.min(
+          game.stones[color],
+          game.config.maxPlacesPerTurn - game.placedThisTurn
+        )
+      );
+    }
+    return Math.max(
+      0,
+      Math.min(game.stones[color], game.config.maxPlacesPerTurn)
+    );
+  }
+
+  /** color가 한 턴 안에 6목을 완성할 수 있는 첫 착수 후보.
+      살아 있는 6칸 창에 이미 m개가 있고 이번 턴에 k개를 더 둘 수 있으면
+      m >= 6-k 인 창은 그 턴 안에 완성 가능하다. 따라서 별도 DFS가 필요 없다.
+      학습 MCTS의 one_turn_winning_squares()와 같은 판정이다. */
+  function oneTurnWinningSquares(game, color) {
+    if (game.isOver) return [];
+
+    const moves = availablePlacements(game, color);
+    if (moves <= 0) return [];
+
+    const need = game.config.winLength;
+    const { best } = threatGrids(game, color);
+    const threshold = need - Math.min(moves, 3);
+    const out = [];
+
+    for (let i = 0; i < game.size * game.size; i++) {
+      if (game.board[i] === 0 && best[i] >= threshold) out.push(i);
+    }
+    return out;
+  }
+
   /** policy 상위 후보에 놓치면 안 되는 전술 후보를 합친다.
-      - 상대 즉시승은 완전 강제 방어
-      - fork 공격/방어가 보이면 END_TURN 금지
-      - 평온한 국면에서만 policy 상위 + END_TURN 허용 */
+      우선순위는 학습 MCTS와 같다.
+      1) 내가 이번 턴 안에 이길 수 있으면 그 승리 첫 수들만
+      2) 상대가 다음 자기 턴 안에 이길 수 있으면 그 승리 창을 막는 수들만
+      3) 그 외에는 fork 공격/방어 + policy
+      4) 평온한 국면에서만 END_TURN 허용 */
   function candidateActions(game, probs, width) {
     const n = game.size;
     const endIndex = n * n;
@@ -125,33 +165,31 @@
     }
     empties.sort((a, b) => probs[b] - probs[a]);
 
-    const need = game.config.winLength;
+    // 내가 같은 턴 안에 2~3수를 이어서 끝낼 수 있다면 방어보다 먼저 끝낸다.
+    const ownWinning = oneTurnWinningSquares(game, game.current);
+    if (ownWinning.length) {
+      return ownWinning.sort((a, b) => probs[b] - probs[a]);
+    }
+
     const foe = game.current === BLACK ? WHITE : BLACK;
+
+    // 상대가 다음 자기 턴에 보유 돌을 연속 사용해 끝낼 수 있으면,
+    // 그 승리 창의 빈칸만 방어 후보로 남긴다. END_TURN은 허용하지 않는다.
+    const foeWinning = oneTurnWinningSquares(game, foe);
+    if (foeWinning.length) {
+      return foeWinning.sort((a, b) => probs[b] - probs[a]);
+    }
+
     const foeThreat = threatGrids(game, foe);
     const ownThreat = threatGrids(game, game.current);
-
-    const mustBlocks = [];
     const foeForks = [];
     const ownForks = [];
 
     for (const i of empties) {
-      if (foeThreat.best[i] >= need - 1) {
-        mustBlocks.push(i);
-        continue;
-      }
       if (foeThreat.forks4[i] >= 2 || foeThreat.forks3[i] >= 2) foeForks.push(i);
       if (ownThreat.forks4[i] >= 2 || ownThreat.forks3[i] >= 2) ownForks.push(i);
     }
 
-    // 상대가 다음 한 수로 끝낼 수 있으면 다른 선택지는 없다.
-    // END_TURN도 허용하지 않고, 반드시 막는 수들끼리만 가치 탐색한다.
-    if (mustBlocks.length) {
-      return mustBlocks.sort((a, b) => probs[b] - probs[a]);
-    }
-
-    // 즉시패는 아니어도 fork 공격/방어가 이미 보이는 국면에서는
-    // 돌을 쌓으며 턴을 넘기지 않는다. 전술 후보를 반드시 포함시키고,
-    // policy 상위 일부도 함께 보아 가치 헤드가 더 좋은 전술 순서를 고르게 한다.
     if (foeForks.length || ownForks.length) {
       const tactical = new Set([...foeForks, ...ownForks]);
       const policyAllowance = Math.max(2, Math.floor(width / 2));
@@ -159,7 +197,6 @@
       return [...tactical].sort((a, b) => probs[b] - probs[a]);
     }
 
-    // 평온한 국면에서만 돌을 모으는 선택(END_TURN)을 허용한다.
     const chosen = new Set(empties.slice(0, width));
     chosen.add(endIndex);
     return [...chosen].sort((a, b) => {
@@ -278,7 +315,8 @@
           const reply = leafMeta[j].reply;
           const replyPrior = childPolicies[k][reply] || 0;
           candidates.push(
-            leafScores[j] + (child.current === rootColor ? 1 : -1) * POLICY_BLEND * replyPrior
+            leafScores[j]
+            + (child.current === rootColor ? 1 : -1) * POLICY_BLEND * replyPrior
           );
         }
         if (candidates.length) {
@@ -360,6 +398,8 @@
       planTurnWithModel,
       pickWithLookahead,
       candidateActions,
+      oneTurnWinningSquares,
+      availablePlacements,
       legalProbs,
       sample,
       findImmediateWin,
