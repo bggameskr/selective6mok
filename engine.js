@@ -12,7 +12,7 @@ const DEFAULTS = {
   maxPlacesPerTurn: 3,
   stonesGainedPerTurn: 2,
   blackStartStones: 2,
-  whiteStartStones: 4,
+  whiteStartStones: 3,
   drawFillRatio: 0.70,
   allowOverline: true,
 };
