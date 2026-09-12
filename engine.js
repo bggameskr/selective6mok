@@ -11,8 +11,8 @@ const DEFAULTS = {
   winLength: 6,
   maxPlacesPerTurn: 3,
   stonesGainedPerTurn: 2,
-  blackStartStones: 1,
-  whiteStartStones: 3,
+  blackStartStones: 2,
+  whiteStartStones: 4,
   drawFillRatio: 0.70,
   allowOverline: true,
 };
