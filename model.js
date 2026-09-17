@@ -7,7 +7,7 @@
    난이도에 따라 제한 탐색을 한다.
      쉬움   0갈래 — 신경망이 낸 수를 그대로 (온도만 높여 흔든다)
      보통   3갈래 — 전술 필수 후보를 보존한 1-ply 가치 탐색
-     어려움 6갈래 — 필수 후보 + 상위 후보 일부를 한 단계 더 읽는 제한 2-ply 탐색
+     어려움 6갈래 — 상위 후보에서 현재 턴 전체와 상대 턴 전체를 제한 탐색
    후보 국면은 가능한 한 배치로 묶어 가치 헤드로 평가한다.
 
    입력을 만드는 encodeState 는 engine.js 안에 있다. 학습에 쓴 encoding.py 와
@@ -17,10 +17,11 @@
   'use strict';
 
   const MODEL_URL = 'sixmok.onnx';
-  const MODEL_BOARD_SIZE = 19;   // 학습할 때 쓴 판 크기
-  const POLICY_BLEND = 0.1;      // 가치가 비슷할 때 정책으로 우열을 가르는 정도
-  const DEEP_ROOTS = 4;          // 어려움에서 2-ply로 다시 펼칠 뿌리 후보 수
-  const DEEP_WIDTH = 3;          // 2-ply의 두 번째 단계 후보 폭
+  const MODEL_BOARD_SIZE = 19;
+  const POLICY_BLEND = 0.1;
+  const DEEP_ROOTS = 4;          // 어려움에서 턴 단위 탐색을 적용할 첫 수 개수
+  const DEEP_WIDTH = 3;          // 한 턴 내부 각 착수에서 펼칠 후보 폭
+  const TURN_NODE_CAP = 384;     // 브라우저 폭발 방지용 frontier 상한
 
   let sessionPromise = null;
 
@@ -47,7 +48,6 @@
     return sessionPromise;
   }
 
-  /** 여러 국면을 한 번에 계산한다. 갈래를 늘려도 호출 횟수를 최소화한다. */
   async function evaluate(games) {
     const n = games[0].size;
     const planeSize = N_PLANES * n * n;
@@ -58,24 +58,25 @@
     const tensor = new ort.Tensor('float32', data, [games.length, N_PLANES, n, n]);
     const out = await sess.run({ board: tensor });
     return {
-      policy: out.policy.data,          // (B, n*n+1)
-      value: out.value.data,            // (B,)
+      policy: out.policy.data,
+      value: out.value.data,
       stride: n * n + 1,
     };
   }
 
-  /** 둘 수 있는 자리만 남긴 확률 분포. */
   function legalProbs(logits, game, offset, stride) {
     const n = game.size;
     const endIndex = n * n;
     const probs = new Float64Array(stride);
     let max = -Infinity;
+
     for (let i = 0; i <= endIndex; i++) {
       if (i < endIndex && game.board[i] !== 0) continue;
       if (i < endIndex && !game.canPlace()) continue;
       const v = logits[offset + i];
       if (v > max) max = v;
     }
+
     let total = 0;
     for (let i = 0; i <= endIndex; i++) {
       if (i < endIndex && (game.board[i] !== 0 || !game.canPlace())) continue;
@@ -87,8 +88,6 @@
     return probs;
   }
 
-  /** 지금 두면 곧바로 6목이 되는 자리. 없으면 -1.
-      탐색에 맡기지 않는다. 이기는 수를 놓치는 일만은 없어야 한다. */
   function findImmediateWin(game) {
     if (!game.canPlace()) return -1;
     const { best } = threatGrids(game, game.current);
@@ -103,13 +102,16 @@
     return index === n * n ? END_TURN : [Math.floor(index / n), index % n];
   }
 
+  function otherColor(color) {
+    return color === BLACK ? WHITE : BLACK;
+  }
+
   function rootValue(game, rootColor) {
     if (!game.isOver) return null;
     if (game.winner === null) return 0;
     return game.winner === rootColor ? 1 : -1;
   }
 
-  /** color가 현재/다음 자기 턴에 연속으로 둘 수 있는 최대 돌 수. */
   function availablePlacements(game, color) {
     if (color === game.current) {
       return Math.max(
@@ -126,9 +128,7 @@
     );
   }
 
-  /** color가 다음 한 턴 안에 완성할 수 있는 실제 6칸 승리창들.
-      상대 돌이 하나라도 들어간 창은 제외하고, 남은 빈칸 수가 이번 턴에 둘 수 있는
-      돌 수 이하인 창만 반환한다. 돌이 띄어져 있어도 같은 6칸 창이면 정확히 잡는다. */
+  /** color가 다음 한 턴 안에 완성할 수 있는 실제 6칸 승리창들. */
   function oneTurnWinningWindows(game, color) {
     if (game.isOver) return [];
 
@@ -137,7 +137,7 @@
 
     const n = game.size;
     const need = game.config.winLength;
-    const foe = color === BLACK ? WHITE : BLACK;
+    const foe = otherColor(color);
     const windows = [];
 
     for (const [dr, dc] of DIRECTIONS) {
@@ -165,12 +165,9 @@
         }
       }
     }
-
     return windows;
   }
 
-  /** color가 한 턴 안에 6목을 완성할 수 있는 첫 착수 후보.
-      실제 승리창의 빈칸 합집합이므로, 띄어진 형태도 연속된 6칸 창 안에만 있으면 잡힌다. */
   function oneTurnWinningSquares(game, color) {
     const out = new Set();
     for (const window of oneTurnWinningWindows(game, color)) {
@@ -179,9 +176,7 @@
     return [...out];
   }
 
-  /** 상대의 모든 한 턴 승리창을 현재 남은 착수 수 안에 실제로 막을 수 있는 첫 수만 반환한다.
-      단순히 위협 칸을 합치는 대신 각 승리창을 하나 이상 때리는 최소 차단 집합을 찾는다.
-      최대 3수까지만 보므로 재귀 분기는 작다. */
+  /** 현재 플레이어가 남은 착수 수 안에 foeColor의 모든 한 턴 승리창을 막을 수 있는 첫 수. */
   function oneTurnDefenseSquares(game, foeColor) {
     const windows = oneTurnWinningWindows(game, foeColor);
     if (!windows.length) return [];
@@ -213,11 +208,6 @@
     });
   }
 
-  /** policy 상위 후보에 놓치면 안 되는 전술 후보를 합친다.
-      1) 내가 이번 턴 안에 이길 수 있으면 그 승리 첫 수들만
-      2) 상대가 다음 자기 턴 안에 이길 수 있으면 모든 승리창을 실제로 막을 수 있는 수들만
-      3) 그 외에는 fork 공격/방어 + policy
-      4) 평온한 국면에서만 END_TURN 허용 */
   function candidateActions(game, probs, width) {
     const n = game.size;
     const endIndex = n * n;
@@ -230,20 +220,15 @@
     }
     empties.sort((a, b) => probs[b] - probs[a]);
 
-    // 내가 같은 턴 안에 2~3수를 이어서 끝낼 수 있다면 방어보다 먼저 끝낸다.
     const ownWinning = oneTurnWinningSquares(game, game.current);
     if (ownWinning.length) {
       return ownWinning.sort((a, b) => probs[b] - probs[a]);
     }
 
-    const foe = game.current === BLACK ? WHITE : BLACK;
-
-    // 상대가 다음 자기 턴 안에 끝낼 수 있으면, 현재 남은 착수 수 안에
-    // 모든 승리창을 차단할 수 있는 첫 수만 강제 방어 후보로 남긴다.
+    const foe = otherColor(game.current);
     const foeWinning = oneTurnWinningSquares(game, foe);
     if (foeWinning.length) {
       const defenses = oneTurnDefenseSquares(game, foe);
-      // 이미 필패라 모든 창을 막는 조합이 없다면 기존처럼 위협 칸 안에서 최선을 찾는다.
       const forced = defenses.length ? defenses : foeWinning;
       return forced.sort((a, b) => probs[b] - probs[a]);
     }
@@ -274,13 +259,13 @@
     });
   }
 
-  /** 온도에 따라 하나를 고른다. 0이면 언제나 최선. */
   function sample(probs, stride, temperature, rng = Math.random) {
     if (!(temperature > 0)) {
       let best = 0;
       for (let i = 1; i < stride; i++) if (probs[i] > probs[best]) best = i;
       return best;
     }
+
     const weights = new Float64Array(stride);
     let total = 0;
     for (let i = 0; i < stride; i++) {
@@ -288,6 +273,7 @@
       weights[i] = Math.pow(probs[i], 1 / temperature);
       total += weights[i];
     }
+
     let roll = rng() * total;
     for (let i = 0; i < stride; i++) {
       roll -= weights[i];
@@ -296,103 +282,213 @@
     return stride - 1;
   }
 
-  /** 후보마다 한 수 놓아보고 가치로 고른다.
-      어려움에서는 1-ply 평가 상위 DEEP_ROOTS개만 다시 DEEP_WIDTH갈래로 펼친다.
-      자식에서도 같은 사람이 계속 두는 경우에는 최대화하고, 턴이 넘어가 상대가 두는
-      경우에는 최소화한다. 이 게임의 한 턴 2~3연속 착수도 자연스럽게 읽힌다. */
+  /**
+   * 같은 사람의 턴이 끝날 때까지 후보 수열을 펼친다.
+   * 각 node는 { game, rootIndex, seqId?, prior } 형태이며 메타데이터를 보존한다.
+   */
+  async function expandWholeTurn(nodes, turnColor, evaluateFn, width) {
+    let frontier = nodes.slice();
+    const done = [];
+
+    // 한 턴 최대 3착수 + END_TURN이므로 네 단계면 충분하다.
+    for (let depth = 0; depth < 4 && frontier.length; depth++) {
+      const active = [];
+
+      for (const node of frontier) {
+        const g = node.game;
+        if (g.isOver || g.current !== turnColor) {
+          done.push(node);
+          continue;
+        }
+
+        if (!g.canPlace()) {
+          const child = g.clone();
+          child.play(END_TURN);
+          done.push({ ...node, game: child });
+          continue;
+        }
+        active.push(node);
+      }
+
+      if (!active.length) {
+        frontier = [];
+        break;
+      }
+
+      const { policy, stride } = await evaluateFn(active.map((node) => node.game));
+      const next = [];
+
+      active.forEach((node, j) => {
+        const g = node.game;
+        const probs = legalProbs(policy, g, j * stride, stride);
+        const actions = candidateActions(g, probs, width);
+
+        for (const action of actions) {
+          const child = g.clone();
+          child.play(toMove(action, g.size));
+          const prior = node.prior * Math.max(probs[action], 1e-12);
+          next.push({ ...node, game: child, prior });
+        }
+      });
+
+      next.sort((a, b) => b.prior - a.prior);
+      frontier = next.slice(0, TURN_NODE_CAP);
+    }
+
+    // 안전장치: 상한에 걸려 아직 턴이 안 끝난 상태는 강제로 턴 종료시켜 평가한다.
+    for (const node of frontier) {
+      const g = node.game.clone();
+      if (!g.isOver && g.current === turnColor) g.play(END_TURN);
+      done.push({ ...node, game: g });
+    }
+
+    return done;
+  }
+
+  /** 네트워크 가치보다 확실한 한 턴 강제승/강제패를 우선한다. */
+  function tacticalLeafValue(game, rootColor) {
+    const terminal = rootValue(game, rootColor);
+    if (terminal !== null) return terminal;
+
+    // 두 턴 탐색이 끝나면 보통 rootColor의 차례다.
+    if (game.current !== rootColor) return null;
+
+    // 지금 한 턴 안에 이길 수 있으면 확정 승리로 본다.
+    if (oneTurnWinningSquares(game, rootColor).length) return 1;
+
+    // 상대가 다음 자기 턴에 이길 수 있고, 이번 턴 안에 모든 승리창을 막을 방법이 없으면 확정 패배다.
+    const foe = otherColor(rootColor);
+    if (oneTurnWinningWindows(game, foe).length && !oneTurnDefenseSquares(game, foe).length) {
+      return -1;
+    }
+    return null;
+  }
+
+  async function evaluateLeaves(nodes, rootColor, evaluateFn) {
+    const scores = new Array(nodes.length);
+    const pending = [];
+    const pendingAt = [];
+
+    nodes.forEach((node, i) => {
+      const forced = tacticalLeafValue(node.game, rootColor);
+      if (forced !== null) scores[i] = forced;
+      else {
+        pending.push(node.game);
+        pendingAt.push(i);
+      }
+    });
+
+    if (pending.length) {
+      const { value } = await evaluateFn(pending);
+      pendingAt.forEach((i, j) => {
+        const g = nodes[i].game;
+        scores[i] = g.current === rootColor ? value[j] : -value[j];
+      });
+    }
+    return scores;
+  }
+
+  /**
+   * 보통: 기존 1-ply.
+   * 어려움: 상위 첫 수들에 대해 '내 남은 턴 전체 → 상대 턴 전체'를 펼쳐 minimax한다.
+   */
   async function pickWithLookahead(game, probs, width, evaluateFn, deep = false) {
     const n = game.size;
     const rootColor = game.current;
     const actions = candidateActions(game, probs, width);
 
-    const children = actions.map((a) => {
+    const children = actions.map((action) => {
       const child = game.clone();
-      child.play(toMove(a, n));
+      child.play(toMove(action, n));
       return child;
     });
 
     const scores = new Array(actions.length);
-    const childPolicies = new Array(actions.length);
-    const pending = [], pendingAt = [];
+    const pending = [];
+    const pendingAt = [];
+
     children.forEach((child, k) => {
       const terminal = rootValue(child, rootColor);
-      if (terminal !== null) {
-        scores[k] = terminal;
-      } else {
+      if (terminal !== null) scores[k] = terminal;
+      else {
         pending.push(child);
         pendingAt.push(k);
       }
     });
 
     if (pending.length) {
-      const { policy, value, stride } = await evaluateFn(pending);
+      const { value } = await evaluateFn(pending);
       pendingAt.forEach((k, j) => {
         const child = children[k];
-        const v = value[j];
-        scores[k] = child.current === rootColor ? v : -v;
-        childPolicies[k] = legalProbs(policy, child, j * stride, stride);
+        scores[k] = child.current === rootColor ? value[j] : -value[j];
       });
     }
 
     if (deep) {
       const expandable = actions
-        .map((action, k) => ({ action, k, score: scores[k] + POLICY_BLEND * probs[action] }))
-        .filter(({ k }) => !children[k].isOver && childPolicies[k])
+        .map((action, k) => ({
+          action,
+          k,
+          score: scores[k] + POLICY_BLEND * probs[action],
+        }))
+        .filter(({ k }) => !children[k].isOver)
         .sort((a, b) => b.score - a.score)
         .slice(0, DEEP_ROOTS);
 
-      const leaves = [];
-      const leafMeta = [];
+      const rootStarts = expandable.map(({ action, k }) => ({
+        game: children[k],
+        rootIndex: k,
+        prior: Math.max(probs[action], 1e-12),
+      }));
 
-      for (const { k } of expandable) {
-        const child = children[k];
-        const replyProbs = childPolicies[k];
-        const replies = candidateActions(child, replyProbs, DEEP_WIDTH);
-        for (const reply of replies) {
-          const leaf = child.clone();
-          leaf.play(toMove(reply, n));
-          leaves.push(leaf);
-          leafMeta.push({ parent: k, reply });
-        }
+      const alreadyEnded = [];
+      const stillRootTurn = [];
+      for (const node of rootStarts) {
+        if (node.game.current === rootColor) stillRootTurn.push(node);
+        else alreadyEnded.push(node);
       }
 
-      const leafScores = new Array(leaves.length);
-      const leafPending = [], leafPendingAt = [];
-      leaves.forEach((leaf, j) => {
-        const terminal = rootValue(leaf, rootColor);
-        if (terminal !== null) leafScores[j] = terminal;
-        else {
-          leafPending.push(leaf);
-          leafPendingAt.push(j);
-        }
+      const rootTurnEnds = alreadyEnded.concat(
+        stillRootTurn.length
+          ? await expandWholeTurn(stillRootTurn, rootColor, evaluateFn, DEEP_WIDTH)
+          : []
+      );
+
+      rootTurnEnds.forEach((node, seqId) => { node.seqId = seqId; });
+
+      const terminalRootEnds = [];
+      const opponentStarts = [];
+      for (const node of rootTurnEnds) {
+        if (node.game.isOver) terminalRootEnds.push(node);
+        else opponentStarts.push(node);
+      }
+
+      const opponentColor = otherColor(rootColor);
+      const opponentTurnEnds = opponentStarts.length
+        ? await expandWholeTurn(opponentStarts, opponentColor, evaluateFn, DEEP_WIDTH)
+        : [];
+
+      const allLeaves = terminalRootEnds.concat(opponentTurnEnds);
+      const leafScores = await evaluateLeaves(allLeaves, rootColor, evaluateFn);
+
+      // 같은 root-turn 수열에서는 상대가 최악의 결과를 선택한다.
+      const seqWorst = new Map();
+      allLeaves.forEach((node, i) => {
+        const prev = seqWorst.get(node.seqId);
+        const score = leafScores[i];
+        if (prev === undefined || score < prev) seqWorst.set(node.seqId, score);
       });
 
-      if (leafPending.length) {
-        const { value } = await evaluateFn(leafPending);
-        leafPendingAt.forEach((j, p) => {
-          const leaf = leaves[j];
-          leafScores[j] = leaf.current === rootColor ? value[p] : -value[p];
-        });
+      // 첫 수 이후의 같은 턴 추가 착수는 우리 선택이므로 가장 좋은 수열을 택한다.
+      const rootBest = new Map();
+      for (const node of rootTurnEnds) {
+        const seqScore = seqWorst.get(node.seqId);
+        if (seqScore === undefined) continue;
+        const prev = rootBest.get(node.rootIndex);
+        if (prev === undefined || seqScore > prev) rootBest.set(node.rootIndex, seqScore);
       }
 
-      for (const { k } of expandable) {
-        const child = children[k];
-        const candidates = [];
-        for (let j = 0; j < leafMeta.length; j++) {
-          if (leafMeta[j].parent !== k) continue;
-          const reply = leafMeta[j].reply;
-          const replyPrior = childPolicies[k][reply] || 0;
-          candidates.push(
-            leafScores[j]
-            + (child.current === rootColor ? 1 : -1) * POLICY_BLEND * replyPrior
-          );
-        }
-        if (candidates.length) {
-          scores[k] = child.current === rootColor
-            ? Math.max(...candidates)
-            : Math.min(...candidates);
-        }
-      }
+      for (const [k, score] of rootBest) scores[k] = score;
     }
 
     let best = 0;
@@ -404,13 +500,12 @@
     return actions[best];
   }
 
-  /** 한 턴 분량의 착수 목록. 빈 배열이면 이번 턴은 쉬고 돌을 모은다는 뜻. */
   async function planTurnWithModel(game, level, evaluateFn) {
     const n = game.size;
     const endIndex = n * n;
     const temperature = level.temperature || 0;
     const width = level.lookahead || 0;
-    const deep = width >= 6;                    // 현재 난이도 설정에서 '어려움'만 2-ply
+    const deep = width >= 6;
 
     const sim = game.clone();
     const moves = [];
@@ -431,8 +526,9 @@
         ? await pickWithLookahead(sim, probs, width, evaluateFn, deep)
         : sample(probs, stride, temperature);
 
-      if (index === endIndex) break;              // 턴을 마치기로 했다
-      const r = Math.floor(index / n), c = index % n;
+      if (index === endIndex) break;
+      const r = Math.floor(index / n);
+      const c = index % n;
       sim.place(r, c);
       moves.push([r, c]);
       if (sim.isOver) break;
@@ -473,6 +569,8 @@
       legalProbs,
       sample,
       findImmediateWin,
+      expandWholeTurn,
+      tacticalLeafValue,
     };
   }
 })();
