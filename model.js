@@ -126,31 +126,96 @@
     );
   }
 
-  /** color가 한 턴 안에 6목을 완성할 수 있는 첫 착수 후보.
-      살아 있는 6칸 창에 이미 m개가 있고 이번 턴에 k개를 더 둘 수 있으면
-      m >= 6-k 인 창은 그 턴 안에 완성 가능하다. 따라서 별도 DFS가 필요 없다.
-      학습 MCTS의 one_turn_winning_squares()와 같은 판정이다. */
-  function oneTurnWinningSquares(game, color) {
+  /** color가 다음 한 턴 안에 완성할 수 있는 실제 6칸 승리창들.
+      상대 돌이 하나라도 들어간 창은 제외하고, 남은 빈칸 수가 이번 턴에 둘 수 있는
+      돌 수 이하인 창만 반환한다. 돌이 띄어져 있어도 같은 6칸 창이면 정확히 잡는다. */
+  function oneTurnWinningWindows(game, color) {
     if (game.isOver) return [];
 
-    const moves = availablePlacements(game, color);
+    const moves = Math.min(availablePlacements(game, color), 3);
     if (moves <= 0) return [];
 
+    const n = game.size;
     const need = game.config.winLength;
-    const { best } = threatGrids(game, color);
-    const threshold = need - Math.min(moves, 3);
-    const out = [];
+    const foe = color === BLACK ? WHITE : BLACK;
+    const windows = [];
 
-    for (let i = 0; i < game.size * game.size; i++) {
-      if (game.board[i] === 0 && best[i] >= threshold) out.push(i);
+    for (const [dr, dc] of DIRECTIONS) {
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          const er = r + dr * (need - 1);
+          const ec = c + dc * (need - 1);
+          if (er < 0 || er >= n || ec < 0 || ec >= n) continue;
+
+          const empties = [];
+          let blocked = false;
+          for (let k = 0; k < need; k++) {
+            const i = (r + dr * k) * n + (c + dc * k);
+            const v = game.board[i];
+            if (v === foe) {
+              blocked = true;
+              break;
+            }
+            if (v === 0) empties.push(i);
+          }
+
+          if (!blocked && empties.length > 0 && empties.length <= moves) {
+            windows.push(empties);
+          }
+        }
+      }
     }
-    return out;
+
+    return windows;
+  }
+
+  /** color가 한 턴 안에 6목을 완성할 수 있는 첫 착수 후보.
+      실제 승리창의 빈칸 합집합이므로, 띄어진 형태도 연속된 6칸 창 안에만 있으면 잡힌다. */
+  function oneTurnWinningSquares(game, color) {
+    const out = new Set();
+    for (const window of oneTurnWinningWindows(game, color)) {
+      for (const i of window) out.add(i);
+    }
+    return [...out];
+  }
+
+  /** 상대의 모든 한 턴 승리창을 현재 남은 착수 수 안에 실제로 막을 수 있는 첫 수만 반환한다.
+      단순히 위협 칸을 합치는 대신 각 승리창을 하나 이상 때리는 최소 차단 집합을 찾는다.
+      최대 3수까지만 보므로 재귀 분기는 작다. */
+  function oneTurnDefenseSquares(game, foeColor) {
+    const windows = oneTurnWinningWindows(game, foeColor);
+    if (!windows.length) return [];
+
+    const moves = Math.min(availablePlacements(game, game.current), 3);
+    if (moves <= 0) return [];
+
+    const candidates = [...new Set(windows.flat())];
+
+    function canCover(remaining, slots) {
+      if (!remaining.length) return true;
+      if (slots <= 0) return false;
+
+      let target = remaining[0];
+      for (const window of remaining) {
+        if (window.length < target.length) target = window;
+      }
+
+      for (const cell of target) {
+        const next = remaining.filter((window) => !window.includes(cell));
+        if (canCover(next, slots - 1)) return true;
+      }
+      return false;
+    }
+
+    return candidates.filter((cell) => {
+      const remaining = windows.filter((window) => !window.includes(cell));
+      return canCover(remaining, moves - 1);
+    });
   }
 
   /** policy 상위 후보에 놓치면 안 되는 전술 후보를 합친다.
-      우선순위는 학습 MCTS와 같다.
       1) 내가 이번 턴 안에 이길 수 있으면 그 승리 첫 수들만
-      2) 상대가 다음 자기 턴 안에 이길 수 있으면 그 승리 창을 막는 수들만
+      2) 상대가 다음 자기 턴 안에 이길 수 있으면 모든 승리창을 실제로 막을 수 있는 수들만
       3) 그 외에는 fork 공격/방어 + policy
       4) 평온한 국면에서만 END_TURN 허용 */
   function candidateActions(game, probs, width) {
@@ -173,11 +238,14 @@
 
     const foe = game.current === BLACK ? WHITE : BLACK;
 
-    // 상대가 다음 자기 턴에 보유 돌을 연속 사용해 끝낼 수 있으면,
-    // 그 승리 창의 빈칸만 방어 후보로 남긴다. END_TURN은 허용하지 않는다.
+    // 상대가 다음 자기 턴 안에 끝낼 수 있으면, 현재 남은 착수 수 안에
+    // 모든 승리창을 차단할 수 있는 첫 수만 강제 방어 후보로 남긴다.
     const foeWinning = oneTurnWinningSquares(game, foe);
     if (foeWinning.length) {
-      return foeWinning.sort((a, b) => probs[b] - probs[a]);
+      const defenses = oneTurnDefenseSquares(game, foe);
+      // 이미 필패라 모든 창을 막는 조합이 없다면 기존처럼 위협 칸 안에서 최선을 찾는다.
+      const forced = defenses.length ? defenses : foeWinning;
+      return forced.sort((a, b) => probs[b] - probs[a]);
     }
 
     const foeThreat = threatGrids(game, foe);
@@ -398,7 +466,9 @@
       planTurnWithModel,
       pickWithLookahead,
       candidateActions,
+      oneTurnWinningWindows,
       oneTurnWinningSquares,
+      oneTurnDefenseSquares,
       availablePlacements,
       legalProbs,
       sample,
