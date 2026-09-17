@@ -5,7 +5,7 @@
    2. 그 폴더를 웹에 올리거나 간단한 서버로 연다 (file:// 로 열면 모델을 못 읽는다).
 
    난이도에 따라 제한 탐색을 한다.
-     쉬움   0갈래 — 신경망이 낸 수를 그대로 (온도만 높여 흔든다)
+     쉬움   0갈래 — 강제수와 정책 상위 후보 안에서 온도로 흔든다
      보통   3갈래 — 전술 필수 후보를 보존한 1-ply 가치 탐색
      어려움 6갈래 — 상위 후보에서 현재 턴 전체와 상대 턴 전체를 제한 탐색
    어려움은 한 번 고른 현재 턴의 수열을 그대로 실행해 같은 턴 안에서 재탐색하지 않는다.
@@ -19,6 +19,7 @@
   const MODEL_URL = 'sixmok.onnx';
   const MODEL_BOARD_SIZE = 19;
   const POLICY_BLEND = 0.1;
+  const EASY_CANDIDATE_WIDTH = 8; // 쉬움은 탐색 없이 이 후보군 안에서만 샘플링
   const DEEP_ROOTS = 3;          // 어려움에서 턴 단위 탐색을 적용할 첫 수 개수
   const DEEP_WIDTH = 3;          // 한 턴 내부 각 착수에서 펼칠 후보 폭
   const TURN_NODE_CAP = 64;      // 브라우저용 beam frontier 상한
@@ -280,6 +281,29 @@
       if (roll <= 0 && weights[i] > 0) return i;
     }
     return stride - 1;
+  }
+
+  /** 쉬움 전용: 전체 판이 아니라 전술/정책 후보 안에서만 온도 샘플링한다. */
+  function sampleActions(probs, actions, temperature, rng = Math.random) {
+    if (!actions.length) return -1;
+
+    if (!(temperature > 0)) {
+      let best = actions[0];
+      for (const action of actions.slice(1)) {
+        if (probs[action] > probs[best]) best = action;
+      }
+      return best;
+    }
+
+    const weights = actions.map((action) => Math.pow(Math.max(probs[action], 1e-12), 1 / temperature));
+    const total = weights.reduce((sum, value) => sum + value, 0);
+    let roll = rng() * total;
+
+    for (let i = 0; i < actions.length; i++) {
+      roll -= weights[i];
+      if (roll <= 0) return actions[i];
+    }
+    return actions[actions.length - 1];
   }
 
   /**
@@ -583,7 +607,7 @@
       return moves;
     }
 
-    // 쉬움/보통은 기존처럼 매 착수마다 가볍게 다시 계산한다.
+    // 쉬움/보통은 매 착수마다 가볍게 다시 계산한다.
     while (sim.canPlace()) {
       const win = findImmediateWin(sim);
       if (win >= 0) {
@@ -596,11 +620,15 @@
       const { policy, stride } = await evaluateFn([sim]);
       const probs = legalProbs(policy, sim, 0, stride);
 
-      const index = width > 0
-        ? await pickWithLookahead(sim, probs, width, evaluateFn, false, false)
-        : sample(probs, stride, temperature);
+      let index;
+      if (width > 0) {
+        index = await pickWithLookahead(sim, probs, width, evaluateFn, false, false);
+      } else {
+        const easyActions = candidateActions(sim, probs, EASY_CANDIDATE_WIDTH);
+        index = sampleActions(probs, easyActions, temperature);
+      }
 
-      if (index === endIndex) break;
+      if (index === endIndex || index < 0) break;
       const r = Math.floor(index / n);
       const c = index % n;
       sim.place(r, c);
@@ -642,6 +670,7 @@
       availablePlacements,
       legalProbs,
       sample,
+      sampleActions,
       findImmediateWin,
       expandWholeTurn,
       tacticalLeafValue,
