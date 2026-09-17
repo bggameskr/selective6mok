@@ -8,7 +8,7 @@
      쉬움   0갈래 — 신경망이 낸 수를 그대로 (온도만 높여 흔든다)
      보통   3갈래 — 전술 필수 후보를 보존한 1-ply 가치 탐색
      어려움 6갈래 — 상위 후보에서 현재 턴 전체와 상대 턴 전체를 제한 탐색
-   후보 국면은 가능한 한 배치로 묶어 가치 헤드로 평가한다.
+   어려움은 한 번 고른 현재 턴의 수열을 그대로 실행해 같은 턴 안에서 재탐색하지 않는다.
 
    입력을 만드는 encodeState 는 engine.js 안에 있다. 학습에 쓴 encoding.py 와
    규격이 같아야 하며, parity_check 로 확인할 수 있다. */
@@ -19,9 +19,9 @@
   const MODEL_URL = 'sixmok.onnx';
   const MODEL_BOARD_SIZE = 19;
   const POLICY_BLEND = 0.1;
-  const DEEP_ROOTS = 4;          // 어려움에서 턴 단위 탐색을 적용할 첫 수 개수
+  const DEEP_ROOTS = 3;          // 어려움에서 턴 단위 탐색을 적용할 첫 수 개수
   const DEEP_WIDTH = 3;          // 한 턴 내부 각 착수에서 펼칠 후보 폭
-  const TURN_NODE_CAP = 384;     // 브라우저 폭발 방지용 frontier 상한
+  const TURN_NODE_CAP = 64;      // 브라우저용 beam frontier 상한
 
   let sessionPromise = null;
 
@@ -284,13 +284,12 @@
 
   /**
    * 같은 사람의 턴이 끝날 때까지 후보 수열을 펼친다.
-   * 각 node는 { game, rootIndex, seqId?, prior } 형태이며 메타데이터를 보존한다.
+   * recordTurnActions=true면 root의 실제 착수 수열도 함께 보존한다.
    */
-  async function expandWholeTurn(nodes, turnColor, evaluateFn, width) {
+  async function expandWholeTurn(nodes, turnColor, evaluateFn, width, recordTurnActions = false) {
     let frontier = nodes.slice();
     const done = [];
 
-    // 한 턴 최대 3착수 + END_TURN이므로 네 단계면 충분하다.
     for (let depth = 0; depth < 4 && frontier.length; depth++) {
       const active = [];
 
@@ -322,12 +321,19 @@
         const g = node.game;
         const probs = legalProbs(policy, g, j * stride, stride);
         const actions = candidateActions(g, probs, width);
+        const endIndex = g.size * g.size;
 
         for (const action of actions) {
           const child = g.clone();
           child.play(toMove(action, g.size));
           const prior = node.prior * Math.max(probs[action], 1e-12);
-          next.push({ ...node, game: child, prior });
+
+          const nextNode = { ...node, game: child, prior };
+          if (recordTurnActions) {
+            nextNode.turnActions = (node.turnActions || []).slice();
+            if (action !== endIndex) nextNode.turnActions.push(action);
+          }
+          next.push(nextNode);
         }
       });
 
@@ -335,7 +341,6 @@
       frontier = next.slice(0, TURN_NODE_CAP);
     }
 
-    // 안전장치: 상한에 걸려 아직 턴이 안 끝난 상태는 강제로 턴 종료시켜 평가한다.
     for (const node of frontier) {
       const g = node.game.clone();
       if (!g.isOver && g.current === turnColor) g.play(END_TURN);
@@ -350,13 +355,10 @@
     const terminal = rootValue(game, rootColor);
     if (terminal !== null) return terminal;
 
-    // 두 턴 탐색이 끝나면 보통 rootColor의 차례다.
     if (game.current !== rootColor) return null;
 
-    // 지금 한 턴 안에 이길 수 있으면 확정 승리로 본다.
     if (oneTurnWinningSquares(game, rootColor).length) return 1;
 
-    // 상대가 다음 자기 턴에 이길 수 있고, 이번 턴 안에 모든 승리창을 막을 방법이 없으면 확정 패배다.
     const foe = otherColor(rootColor);
     if (oneTurnWinningWindows(game, foe).length && !oneTurnDefenseSquares(game, foe).length) {
       return -1;
@@ -391,8 +393,11 @@
   /**
    * 보통: 기존 1-ply.
    * 어려움: 상위 첫 수들에 대해 '내 남은 턴 전체 → 상대 턴 전체'를 펼쳐 minimax한다.
+   * returnPlan=true면 어려움에서 최종 첫 수 대신 이번 턴의 전체 착수 수열을 돌려준다.
    */
-  async function pickWithLookahead(game, probs, width, evaluateFn, deep = false) {
+  async function pickWithLookahead(
+    game, probs, width, evaluateFn, deep = false, returnPlan = false
+  ) {
     const n = game.size;
     const rootColor = game.current;
     const actions = candidateActions(game, probs, width);
@@ -424,6 +429,8 @@
       });
     }
 
+    let deepPlans = null;
+
     if (deep) {
       const expandable = actions
         .map((action, k) => ({
@@ -435,10 +442,12 @@
         .sort((a, b) => b.score - a.score)
         .slice(0, DEEP_ROOTS);
 
+      const endIndex = n * n;
       const rootStarts = expandable.map(({ action, k }) => ({
         game: children[k],
         rootIndex: k,
         prior: Math.max(probs[action], 1e-12),
+        turnActions: action === endIndex ? [] : [action],
       }));
 
       const alreadyEnded = [];
@@ -450,7 +459,9 @@
 
       const rootTurnEnds = alreadyEnded.concat(
         stillRootTurn.length
-          ? await expandWholeTurn(stillRootTurn, rootColor, evaluateFn, DEEP_WIDTH)
+          ? await expandWholeTurn(
+              stillRootTurn, rootColor, evaluateFn, DEEP_WIDTH, true
+            )
           : []
       );
 
@@ -465,13 +476,14 @@
 
       const opponentColor = otherColor(rootColor);
       const opponentTurnEnds = opponentStarts.length
-        ? await expandWholeTurn(opponentStarts, opponentColor, evaluateFn, DEEP_WIDTH)
+        ? await expandWholeTurn(
+            opponentStarts, opponentColor, evaluateFn, DEEP_WIDTH, false
+          )
         : [];
 
       const allLeaves = terminalRootEnds.concat(opponentTurnEnds);
       const leafScores = await evaluateLeaves(allLeaves, rootColor, evaluateFn);
 
-      // 같은 root-turn 수열에서는 상대가 최악의 결과를 선택한다.
       const seqWorst = new Map();
       allLeaves.forEach((node, i) => {
         const prev = seqWorst.get(node.seqId);
@@ -479,24 +491,58 @@
         if (prev === undefined || score < prev) seqWorst.set(node.seqId, score);
       });
 
-      // 첫 수 이후의 같은 턴 추가 착수는 우리 선택이므로 가장 좋은 수열을 택한다.
       const rootBest = new Map();
       for (const node of rootTurnEnds) {
         const seqScore = seqWorst.get(node.seqId);
         if (seqScore === undefined) continue;
+
         const prev = rootBest.get(node.rootIndex);
-        if (prev === undefined || seqScore > prev) rootBest.set(node.rootIndex, seqScore);
+        if (prev === undefined || seqScore > prev.score) {
+          rootBest.set(node.rootIndex, {
+            score: seqScore,
+            turnActions: (node.turnActions || []).slice(),
+          });
+        }
       }
 
-      for (const [k, score] of rootBest) scores[k] = score;
+      if (rootBest.size) {
+        deepPlans = rootBest;
+        for (const [k, result] of rootBest) scores[k] = result.score;
+      }
     }
 
-    let best = 0;
-    for (let k = 1; k < actions.length; k++) {
-      const a = scores[k] + POLICY_BLEND * probs[actions[k]];
-      const b = scores[best] + POLICY_BLEND * probs[actions[best]];
-      if (a > b) best = k;
+    let best;
+    if (deepPlans && deepPlans.size) {
+      // 어려움에서는 실제 턴 전체를 검토한 후보끼리만 최종 비교한다.
+      const indices = [...deepPlans.keys()];
+      best = indices[0];
+      for (const k of indices.slice(1)) {
+        const a = scores[k] + POLICY_BLEND * probs[actions[k]];
+        const b = scores[best] + POLICY_BLEND * probs[actions[best]];
+        if (a > b) best = k;
+      }
+    } else {
+      best = 0;
+      for (let k = 1; k < actions.length; k++) {
+        const a = scores[k] + POLICY_BLEND * probs[actions[k]];
+        const b = scores[best] + POLICY_BLEND * probs[actions[best]];
+        if (a > b) best = k;
+      }
     }
+
+    if (returnPlan) {
+      if (deepPlans && deepPlans.has(best)) {
+        return {
+          action: actions[best],
+          turnActions: deepPlans.get(best).turnActions,
+        };
+      }
+      return {
+        action: actions[best],
+        turnActions: actions[best] === n * n ? [] : [actions[best]],
+      };
+    }
+
     return actions[best];
   }
 
@@ -510,6 +556,34 @@
     const sim = game.clone();
     const moves = [];
 
+    // 어려움은 비싼 턴 단위 탐색을 딱 한 번만 하고,
+    // 거기서 선택한 현재 턴의 수열을 그대로 실행한다.
+    if (deep) {
+      const win = findImmediateWin(sim);
+      if (win >= 0) {
+        const r = Math.floor(win / n);
+        const c = win % n;
+        return [[r, c]];
+      }
+
+      const { policy, stride } = await evaluateFn([sim]);
+      const probs = legalProbs(policy, sim, 0, stride);
+      const plan = await pickWithLookahead(
+        sim, probs, width, evaluateFn, true, true
+      );
+
+      for (const index of plan.turnActions) {
+        if (index === endIndex || !sim.canPlace()) break;
+        const r = Math.floor(index / n);
+        const c = index % n;
+        sim.place(r, c);
+        moves.push([r, c]);
+        if (sim.isOver) break;
+      }
+      return moves;
+    }
+
+    // 쉬움/보통은 기존처럼 매 착수마다 가볍게 다시 계산한다.
     while (sim.canPlace()) {
       const win = findImmediateWin(sim);
       if (win >= 0) {
@@ -523,7 +597,7 @@
       const probs = legalProbs(policy, sim, 0, stride);
 
       const index = width > 0
-        ? await pickWithLookahead(sim, probs, width, evaluateFn, deep)
+        ? await pickWithLookahead(sim, probs, width, evaluateFn, false, false)
         : sample(probs, stride, temperature);
 
       if (index === endIndex) break;
