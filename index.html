@@ -311,6 +311,13 @@
     color: var(--paper-dim);
   }
 
+  .result-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
   @keyframes drop {
     from { transform: translateY(-6px) scale(0.7); opacity: 0; }
     to { transform: none; opacity: 1; }
@@ -361,7 +368,10 @@
       <div class="result-card">
         <h2 id="result-title">흑 승리</h2>
         <p id="result-detail"></p>
-        <button class="primary" id="result-new">새 판</button>
+        <div class="result-actions">
+          <button id="download-training">학습용 기보 다운로드</button>
+          <button class="primary" id="result-new">새 판</button>
+        </div>
       </div>
     </div>
   </div>
@@ -400,6 +410,9 @@
   </aside>
 </main>
 
+<!-- 학습용 기보를 NumPy .npz로 묶기 위한 작은 ZIP 라이브러리. -->
+<script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
+
 <!-- 게임 엔진. 예전에는 이 파일 안에 복사돼 있었는데, 고칠 때마다 두 군데를
      맞춰야 해서 실수가 잦았다. 이제 engine.js 하나만 고치면 된다. -->
 <script src="engine.js"></script>
@@ -428,6 +441,8 @@
   let hover = null;          // 마우스 미리보기 좌표
   let cursor = null;         // 키보드 커서 좌표
   let logLines = [];
+  let trainingSamples = [];  // (행동 직전 encodeState, 실제 행동, 행동한 색)
+  let trainingTurnStartLength = 0; // 무르기 시 이번 턴 샘플만 되돌리기 위한 길이
 
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const finePointer = window.matchMedia('(pointer: fine)').matches;
@@ -492,6 +507,155 @@
 
   window.addEventListener('model-status', updateBadge);
   window.__aiStatus = aiStatus;
+
+
+  /* ---------------------------------------------------------- 학습용 기보 */
+
+  const TRAINING_RULESET = 'v3_forced_windows';
+
+  function trainingActionIndex(move) {
+    return move === END_TURN
+      ? game.size * game.size
+      : move[0] * game.size + move[1];
+  }
+
+  function makeTrainingSample(move) {
+    return {
+      x: encodeState(game),
+      action: trainingActionIndex(move),
+      color: game.current,
+    };
+  }
+
+  // NumPy float16과 동일한 IEEE-754 half bit pattern으로 바꾼다.
+  function float32ToFloat16Bits(value) {
+    const f32 = new Float32Array(1);
+    const u32 = new Uint32Array(f32.buffer);
+    f32[0] = value;
+    const x = u32[0];
+    const sign = (x >>> 16) & 0x8000;
+    let exponent = ((x >>> 23) & 0xff) - 127 + 15;
+    let mantissa = x & 0x7fffff;
+
+    if (exponent <= 0) {
+      if (exponent < -10) return sign;
+      mantissa = (mantissa | 0x800000) >>> (1 - exponent);
+      return sign | ((mantissa + 0x1000) >>> 13);
+    }
+    if (exponent >= 31) {
+      return sign | (mantissa ? 0x7e00 : 0x7c00);
+    }
+    return sign | (exponent << 10) | ((mantissa + 0x1000) >>> 13);
+  }
+
+  function npyBytes(descr, shape, payload) {
+    const shapeText = shape.length === 0
+      ? '()'
+      : '(' + shape.join(', ') + (shape.length === 1 ? ',' : '') + ')';
+    const dict = `{'descr': '${descr}', 'fortran_order': False, 'shape': ${shapeText}, }`;
+    const preamble = 10; // magic 6 + version 2 + header-length 2
+    const pad = (16 - ((preamble + dict.length + 1) % 16)) % 16;
+    const header = new TextEncoder().encode(dict + ' '.repeat(pad) + '\n');
+
+    if (header.length > 0xffff) throw new Error('NPY 헤더가 너무 큽니다.');
+
+    const out = new Uint8Array(preamble + header.length + payload.length);
+    out.set([0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 0x01, 0x00], 0);
+    out[8] = header.length & 0xff;
+    out[9] = (header.length >>> 8) & 0xff;
+    out.set(header, preamble);
+    out.set(payload, preamble + header.length);
+    return out;
+  }
+
+  function buildTrainingNpzFiles() {
+    const samples = trainingSamples;
+    const n = game.size;
+    const plane = n * n;
+    const stride = plane + 1;
+    const xPerSample = N_PLANES * plane;
+
+    // x: MCTS BUFFER와 동일하게 float16 [N, 16, 19, 19]
+    const xPayload = new Uint8Array(samples.length * xPerSample * 2);
+    const xView = new DataView(xPayload.buffer);
+    let xOffset = 0;
+    for (const sample of samples) {
+      for (let i = 0; i < sample.x.length; i++) {
+        xView.setUint16(xOffset, float32ToFloat16Bits(sample.x[i]), true);
+        xOffset += 2;
+      }
+    }
+
+    // pi: MCTS 방문분포 자리에는 실제 기보 착수를 one-hot policy target으로 넣는다.
+    const piPayload = new Uint8Array(samples.length * stride * 2);
+    const piView = new DataView(piPayload.buffer);
+    for (let row = 0; row < samples.length; row++) {
+      piView.setUint16((row * stride + samples[row].action) * 2, 0x3c00, true);
+    }
+
+    // y: 실제 행동 index, int64
+    const yPayload = new Uint8Array(samples.length * 8);
+    const yView = new DataView(yPayload.buffer);
+    for (let i = 0; i < samples.length; i++) {
+      yView.setBigInt64(i * 8, BigInt(samples[i].action), true);
+    }
+
+    // v: 해당 상태에서 행동한 색 관점의 최종 승패 (+1 / 0 / -1)
+    const vPayload = new Uint8Array(samples.length * 4);
+    const vView = new DataView(vPayload.buffer);
+    for (let i = 0; i < samples.length; i++) {
+      const value = game.winner === null
+        ? 0
+        : (game.winner === samples[i].color ? 1 : -1);
+      vView.setFloat32(i * 4, value, true);
+    }
+
+    // ruleset: np.asarray('v3_forced_windows')와 같은 scalar <U17
+    const codePoints = Array.from(TRAINING_RULESET);
+    const rulesPayload = new Uint8Array(codePoints.length * 4);
+    const rulesView = new DataView(rulesPayload.buffer);
+    codePoints.forEach((ch, i) => {
+      rulesView.setUint32(i * 4, ch.codePointAt(0), true);
+    });
+
+    return {
+      'x.npy': npyBytes('<f2', [samples.length, N_PLANES, n, n], xPayload),
+      'pi.npy': npyBytes('<f2', [samples.length, stride], piPayload),
+      'y.npy': npyBytes('<i8', [samples.length], yPayload),
+      'v.npy': npyBytes('<f4', [samples.length], vPayload),
+      'ruleset.npy': npyBytes(`<U${codePoints.length}`, [], rulesPayload),
+    };
+  }
+
+  function downloadTrainingBuffer() {
+    if (!game.isOver) return;
+    if (!trainingSamples.length) {
+      setHint('저장할 기보가 없습니다.', true);
+      return;
+    }
+    if (!window.fflate || typeof window.fflate.zipSync !== 'function') {
+      setHint('기보 압축 라이브러리를 불러오지 못했습니다.', true);
+      return;
+    }
+
+    try {
+      const npz = window.fflate.zipSync(buildTrainingNpzFiles(), { level: 6 });
+      const blob = new Blob([npz], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+      a.href = url;
+      a.download = `human_game_${TRAINING_RULESET}_${stamp}.npz`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setHint(`학습용 기보 ${trainingSamples.length}개 표본을 저장했습니다.`);
+    } catch (err) {
+      console.error('학습용 기보 저장 실패', err);
+      setHint('학습용 기보 저장에 실패했습니다: ' + err.message, true);
+    }
+  }
 
   /* ---------------------------------------------------------------- 그리기 */
 
@@ -776,8 +940,10 @@
         : '한 턴에 세 개까지만 둘 수 있습니다. 턴을 마치세요.', true);
       return;
     }
+    const sample = makeTrainingSample([r, c]);
     try {
       game.place(r, c);
+      trainingSamples.push(sample);
     } catch (err) {
       setHint(err.message, true);
       return;
@@ -825,7 +991,9 @@
   el('end-turn').addEventListener('click', () => {
     if (busy || game.isOver || game.current !== humanColor) return;
     logTurn(humanColor, game.lastPlaced);
+    const sample = makeTrainingSample(END_TURN);
     game.endTurn();
+    trainingSamples.push(sample);
     render();
     runAiTurn();
   });
@@ -833,12 +1001,14 @@
   el('undo').addEventListener('click', () => {
     if (!turnStart || busy) return;
     game.restore(turnStart);
-    setHint('이번 턴에 둔 돌을 되돌렸습니다.');
+    trainingSamples.length = trainingTurnStartLength;
+    setHint('이번 턴에 둔 돌과 학습용 기록을 되돌렸습니다.');
     render();
   });
 
   el('new-game').addEventListener('click', newGame);
   el('result-new').addEventListener('click', newGame);
+  el('download-training').addEventListener('click', downloadTrainingBuffer);
   el('side').addEventListener('change', newGame);
   el('level').addEventListener('change', () => {
     aiLevel = el('level').value;
@@ -867,21 +1037,27 @@
     const placed = [];
     for (const [r, c] of moves) {
       if (!game.canPlace()) break;
+      const sample = makeTrainingSample([r, c]);
       game.place(r, c);
+      trainingSamples.push(sample);
       placed.push([r, c]);
       render();
       if (game.isOver) break;
       await sleep(240);
     }
     logTurn(game.current, placed);
-    if (!game.isOver) game.endTurn();
-    else finishLog();
+    if (!game.isOver) {
+      const sample = makeTrainingSample(END_TURN);
+      game.endTurn();
+      trainingSamples.push(sample);
+    } else finishLog();
     busy = false;
     afterTurn();
   }
 
   function afterTurn() {
     turnStart = game.isOver ? null : game.snapshot();
+    trainingTurnStartLength = trainingSamples.length;
     defaultHint();
     render();
   }
@@ -890,6 +1066,8 @@
     humanColor = parseInt(el('side').value, 10);
     game = new SixMok({ boardSize: BOARD_SIZE });
     logLines = [];
+    trainingSamples = [];
+    trainingTurnStartLength = 0;
     hover = null;
     cursor = null;
     busy = false;
