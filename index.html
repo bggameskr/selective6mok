@@ -29,6 +29,7 @@
   html, body {
     margin: 0;
     height: 100%;
+    min-height: 100%;
     background: var(--ink);
     color: var(--paper);
     font-family: var(--font-ui);
@@ -38,6 +39,7 @@
   body {
     display: flex;
     flex-direction: column;
+    min-height: 100dvh;
   }
 
   /* ---------------------------------------------------------- 상단 바 */
@@ -137,8 +139,12 @@
 
   canvas {
     display: block;
+    max-width: 100%;
     border-radius: var(--radius);
     touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
   }
 
   /* ---------------------------------------------------------- 돌 창고 */
@@ -328,16 +334,154 @@
   }
 
   @media (max-width: 820px) {
-    .stage { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+    html, body {
+      height: auto;
+      min-height: 100%;
+      min-height: 100dvh;
+    }
+
+    body { overflow-y: auto; }
+
+    .topbar {
+      padding: 9px 10px 8px;
+      gap: 6px 10px;
+      align-items: center;
+    }
+
+    .wordmark { font-size: 20px; }
+    .tagline { display: none; }
+
+    .topbar-controls {
+      width: 100%;
+      margin-left: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      gap: 6px;
+    }
+
+    .topbar-controls .badge {
+      grid-column: 1 / -1;
+      justify-self: start;
+    }
+
+    select, button {
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+
+    .stage {
+      display: flex;
+      flex-direction: column;
+      min-height: auto;
+      overflow: visible;
+    }
+
+    .board-wrap {
+      width: 100%;
+      min-height: auto;
+      padding: 6px;
+      place-items: start center;
+    }
+
     .rail {
       border-left: none;
       border-top: 1px solid var(--field-edge);
-      padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
-      gap: 12px;
+      padding: 12px 12px calc(14px + env(safe-area-inset-bottom));
+      gap: 10px;
     }
+
     .log { display: none; }
-    .board-wrap { padding: 10px; }
-    .bank-row { display: flex; gap: 22px; align-items: flex-start; }
+
+    .bank-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .actions { gap: 8px; }
+    .actions button { min-height: 46px; }
+
+    .hint {
+      min-height: 0;
+      margin-top: -2px;
+    }
+
+    .result-card {
+      width: min(360px, calc(100% - 24px));
+      padding: 24px 20px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .topbar-controls {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .topbar-controls .badge,
+    #new-game {
+      grid-column: 1 / -1;
+    }
+
+    .rail { padding-left: 10px; padding-right: 10px; }
+    .bank-row { gap: 10px; }
+
+    .token, .slot {
+      width: 20px;
+      height: 20px;
+    }
+  }
+
+  @media (orientation: landscape) and (max-height: 620px) and (pointer: coarse) {
+    html, body {
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    .topbar {
+      flex-wrap: nowrap;
+      padding: 6px 10px;
+    }
+
+    .topbar-controls {
+      width: auto;
+      margin-left: auto;
+      display: flex;
+      flex-wrap: nowrap;
+    }
+
+    .topbar-controls .badge { display: none; }
+
+    .stage {
+      flex: 1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 260px;
+      grid-template-rows: 1fr;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .board-wrap {
+      min-height: 0;
+      height: 100%;
+      padding: 6px;
+      place-items: center;
+    }
+
+    .rail {
+      min-height: 0;
+      overflow-y: auto;
+      border-top: none;
+      border-left: 1px solid var(--field-edge);
+      padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+    }
+
+    .bank-row { display: block; }
+
+    .bank-row > div + div { margin-top: 10px; }
+
+    .actions button { min-height: 40px; }
   }
 </style>
 </head>
@@ -666,7 +810,13 @@
     const style = getComputedStyle(wrap);
     const availW = wrap.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
     const availH = wrap.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-    const size = Math.max(200, Math.floor(Math.min(availW, availH)));
+    const mobilePortrait = window.matchMedia('(max-width: 820px)').matches
+      && !window.matchMedia('(orientation: landscape) and (max-height: 620px) and (pointer: coarse)').matches;
+
+    // 세로 모바일에서는 19×19 교차점을 정확히 누를 수 있도록 가로 폭을 우선한다.
+    // 데스크톱/가로 모바일은 남는 높이 안에 판을 맞춘다.
+    const rawSize = mobilePortrait ? availW : Math.min(availW, availH);
+    const size = Math.max(200, Math.floor(rawSize));
 
     const dpr = window.devicePixelRatio || 1;
     canvas.style.width = size + 'px';
@@ -903,6 +1053,9 @@
     if (game.placedThisTurn === 0 && stones < 3) {
       return setHint('지금 턴을 그냥 마치면 돌이 쌓입니다. 세 개가 모이면 한 턴에 몰아 둘 수 있습니다.');
     }
+    if (game.placedThisTurn > 0) {
+      return setHint('이번 턴에 둔 돌을 다시 누르면 회수할 수 있습니다.');
+    }
     return setHint('');
   }
 
@@ -928,8 +1081,48 @@
     const r = Math.round((y - geom.pad) / geom.cell);
     if (!game.inside(r, c)) return null;
     const [px, py] = xy(r, c);
-    if (Math.hypot(px - x, py - y) > geom.cell * 0.55) return null;
+    const hitRadius = geom.cell * (finePointer ? 0.55 : 0.72);
+    if (Math.hypot(px - x, py - y) > hitRadius) return null;
     return [r, c];
+  }
+
+  function isCurrentTurnStone(r, c) {
+    return game.current === humanColor
+      && game.lastPlaced.some(([rr, cc]) => rr === r && cc === c);
+  }
+
+  function reclaimCurrentTurnStone(r, c) {
+    if (!turnStart || busy || game.isOver || game.current !== humanColor) return false;
+
+    const removeAt = game.lastPlaced.findIndex(([rr, cc]) => rr === r && cc === c);
+    if (removeAt < 0) return false;
+
+    const keep = game.lastPlaced
+      .filter((_, i) => i !== removeAt)
+      .map(([rr, cc]) => [rr, cc]);
+
+    // 턴 시작 상태로 돌아간 뒤 회수하지 않은 돌만 원래 순서대로 다시 둔다.
+    // 이렇게 하면 보유 돌, placedThisTurn, history, 학습용 표본이 모두 함께 맞춰진다.
+    game.restore(turnStart);
+    trainingSamples.length = trainingTurnStartLength;
+
+    for (const move of keep) {
+      const sample = makeTrainingSample(move);
+      game.place(move[0], move[1]);
+      trainingSamples.push(sample);
+    }
+
+    setHint((r + 1) + '·' + (c + 1) + ' 돌을 회수했습니다.');
+    render();
+    return true;
+  }
+
+  function humanTogglePoint(r, c) {
+    if (isCurrentTurnStone(r, c)) {
+      reclaimCurrentTurnStone(r, c);
+      return;
+    }
+    humanPlace(r, c);
   }
 
   function humanPlace(r, c) {
@@ -958,7 +1151,7 @@
 
   canvas.addEventListener('click', (e) => {
     const p = pointFromEvent(e);
-    if (p) humanPlace(p[0], p[1]);
+    if (p) humanTogglePoint(p[0], p[1]);
   });
 
   if (finePointer) {
@@ -984,7 +1177,7 @@
       draw();
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      humanPlace(cursor[0], cursor[1]);
+      humanTogglePoint(cursor[0], cursor[1]);
     }
   });
 
