@@ -605,7 +605,7 @@
         <h2 id="result-title">흑 승리</h2>
         <p id="result-detail"></p>
         <div class="result-actions">
-          <button id="download-training">학습용 기보 다운로드</button>
+          <button id="download-training" hidden>학습용 기보 다운로드</button>
           <button class="primary" id="result-new">새 판</button>
         </div>
       </div>
@@ -1156,11 +1156,16 @@
   function showResult() {
     if (resultShown) return;
     resultShown = true;
+    const playerWon = game.winner === humanColor;
     const title = game.winner ? `${colorName[game.winner]} 승리` : '무승부';
     el('result-title').textContent = title;
     el('result-detail').textContent = game.winner
-      ? (game.winner === humanColor ? '여섯 개를 이었습니다.' : 'AI가 여섯 개를 이었습니다.')
+      ? (playerWon ? '여섯 개를 이었습니다.' : 'AI가 여섯 개를 이었습니다.')
       : `판의 70%가 채워졌습니다. (${game.stonesOnBoard}개)`;
+
+    // 학습용 인간 기보는 플레이어가 승리한 판에서만 받는다.
+    el('download-training').hidden = !playerWon;
+
     setTimeout(() => { el('result').hidden = false; }, reduceMotion ? 0 : 900);
   }
 
@@ -1360,6 +1365,7 @@
     resultShown = false;
     bankKeys[BLACK] = bankKeys[WHITE] = null;
     el('result').hidden = true;
+    el('download-training').hidden = true;
     resize();
     if (game.current === humanColor) {
       afterTurn();
