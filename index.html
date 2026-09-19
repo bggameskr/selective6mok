@@ -61,6 +61,31 @@
     margin: 0;
   }
 
+  .brand-lockup {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .mobile-brand-meta {
+    display: none;
+  }
+
+  .mini-stones {
+    display: inline-flex;
+    gap: 3px;
+    align-items: center;
+  }
+
+  .mini-stones i {
+    display: block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--celadon);
+  }
+
   .tagline {
     font-size: 12px;
     color: var(--paper-dim);
@@ -355,10 +380,31 @@
       align-items: center;
     }
 
+    .brand-lockup {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 3px;
+      min-width: 0;
+    }
+
     .wordmark {
       flex: 0 0 auto;
       font-size: 18px;
       line-height: 1;
+    }
+
+    .mobile-brand-meta {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-family: var(--font-mono);
+      font-size: 8px;
+      line-height: 1;
+      letter-spacing: 0.04em;
+      color: var(--paper-dim);
+      white-space: nowrap;
     }
 
     .tagline,
@@ -531,7 +577,15 @@
 <body>
 
 <header class="topbar">
-  <h1 class="wordmark">육목</h1>
+  <div class="brand-lockup">
+    <h1 class="wordmark">육목</h1>
+    <div class="mobile-brand-meta" aria-hidden="true">
+      <span class="mini-stones">
+        <i></i><i></i><i></i>
+      </span>
+      <span>19×19 · 한 턴 최대 3수</span>
+    </div>
+  </div>
   <span class="tagline">19줄 판. 여섯 개를 잇는 쪽이 이긴다. 돌은 턴마다 두 개씩 들어온다.</span>
   <div class="topbar-controls">
     <span class="badge" id="ai-badge" title="지금 상대를 맡고 있는 쪽">규칙 기반 AI</span>
