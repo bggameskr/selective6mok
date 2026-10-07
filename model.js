@@ -11,9 +11,10 @@
    어려움은 한 번 고른 현재 턴의 수열을 그대로 실행해 같은 턴 안에서 재탐색하지 않는다.
 
    웹에서는 게임마다 D4 대칭 하나를 고정해 모델에 보여주는 방향을 바꾼다.
-   어려움의 초반에는 탐색 점수가 최고점과 거의 같은 후보들만 제한적으로 샘플링해
-   매 판 같은 오프닝이 반복되는 현상을 줄인다. 강제승/강제방어와 중후반 선택은
-   결정적으로 유지한다.
+   빈 판에서 AI가 먼저 두는 경우에는 선택한 턴 수열 자체를 게임별 대칭으로 변환해
+   같은 좌표의 오프닝이 반복되지 않게 한다. 보통/어려움의 초반에는 탐색 점수가
+   최고점과 거의 같은 후보들만 제한적으로 샘플링한다. 강제승/강제방어와 중후반
+   선택은 결정적으로 유지한다.
 
    입력을 만드는 encodeState 는 engine.js 안에 있다. 학습에 쓴 encoding.py 와
    규격이 같아야 하며, parity_check 로 확인할 수 있다. */
@@ -33,6 +34,7 @@
   const OPENING_SAMPLE_TEMPERATURE = 0.015;
 
   const gameSymmetries = new WeakMap();
+  let lastOpeningFirstIndex = -1;
   let sessionPromise = null;
 
   function announce(status, detail) {
@@ -71,6 +73,18 @@
       case 7: return [c, r];
       default: return [r, c];
     }
+  }
+
+  function inverseSymmetry(symmetry) {
+    switch (symmetry & 7) {
+      case 1: return 3;
+      case 3: return 1;
+      default: return symmetry & 7;
+    }
+  }
+
+  function transformMoves(moves, n, symmetry) {
+    return moves.map(([r, c]) => transformCoord(r, c, n, symmetry));
   }
 
   function encodeWithSymmetry(game, symmetry) {
@@ -120,6 +134,37 @@
       gameSymmetries.set(game, Math.floor(rng() * 8) & 7);
     }
     return gameSymmetries.get(game);
+  }
+
+  function chooseOpeningSymmetry(moves, n, rng = Math.random) {
+    const candidates = [];
+    const fallback = [];
+
+    for (let symmetry = 0; symmetry < 8; symmetry++) {
+      fallback.push(symmetry);
+      if (!moves.length) {
+        candidates.push(symmetry);
+        continue;
+      }
+
+      const [r, c] = transformCoord(
+        moves[0][0], moves[0][1], n, inverseSymmetry(symmetry)
+      );
+      const index = r * n + c;
+      if (index !== lastOpeningFirstIndex) candidates.push(symmetry);
+    }
+
+    const pool = candidates.length ? candidates : fallback;
+    const symmetry = pool[Math.floor(rng() * pool.length) % pool.length];
+
+    if (moves.length) {
+      const [r, c] = transformCoord(
+        moves[0][0], moves[0][1], n, inverseSymmetry(symmetry)
+      );
+      lastOpeningFirstIndex = r * n + c;
+    }
+
+    return symmetry;
   }
 
   async function evaluate(games, symmetry = 0) {
@@ -635,7 +680,6 @@
     }
 
     if (
-      deep &&
       options.openingVariation &&
       canVaryOpening(game) &&
       actions[best] !== n * n
@@ -732,10 +776,12 @@
 
       let index;
       if (width > 0) {
-        index = await pickWithLookahead(sim, probs, width, evaluateFn, false, false);
+        index = await pickWithLookahead(
+          sim, probs, width, evaluateFn, false, false, options
+        );
       } else {
         const easyActions = candidateActions(sim, probs, EASY_CANDIDATE_WIDTH);
-        index = sampleActions(probs, easyActions, temperature);
+        index = sampleActions(probs, easyActions, temperature, options.rng || Math.random);
       }
 
       if (index === endIndex || index < 0) break;
@@ -757,6 +803,20 @@
     }
 
     const level = (typeof window.AI_LEVEL === 'function' ? window.AI_LEVEL() : null) || {};
+    const pristineOpening = boardStoneCount(game) === 0 && !gameSymmetries.has(game);
+
+    if (pristineOpening) {
+      // 빈 판은 회전/반사해도 입력이 동일하다. 따라서 먼저 정규 방향으로 계획한 뒤
+      // 턴 수열 자체를 역대칭으로 옮겨 실제 착수 위치가 게임마다 달라지게 한다.
+      const moves = await planTurnWithModel(game, level, evaluate, {
+        openingVariation: true,
+        rng: Math.random,
+      });
+      const symmetry = chooseOpeningSymmetry(moves, game.size, Math.random);
+      gameSymmetries.set(game, symmetry);
+      return transformMoves(moves, game.size, inverseSymmetry(symmetry));
+    }
+
     const symmetry = symmetryForGame(game);
     const evaluateForGame = (games) => evaluate(games, symmetry);
 
@@ -792,9 +852,12 @@
       expandWholeTurn,
       tacticalLeafValue,
       transformCoord,
+      inverseSymmetry,
+      transformMoves,
       encodeWithSymmetry,
       restorePolicySymmetry,
       symmetryForGame,
+      chooseOpeningSymmetry,
       boardStoneCount,
       canVaryOpening,
     };
