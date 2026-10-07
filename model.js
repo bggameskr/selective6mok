@@ -10,6 +10,11 @@
      어려움 6갈래 — 상위 후보에서 현재 턴 전체와 상대 턴 전체를 제한 탐색
    어려움은 한 번 고른 현재 턴의 수열을 그대로 실행해 같은 턴 안에서 재탐색하지 않는다.
 
+   웹에서는 게임마다 D4 대칭 하나를 고정해 모델에 보여주는 방향을 바꾼다.
+   어려움의 초반에는 탐색 점수가 최고점과 거의 같은 후보들만 제한적으로 샘플링해
+   매 판 같은 오프닝이 반복되는 현상을 줄인다. 강제승/강제방어와 중후반 선택은
+   결정적으로 유지한다.
+
    입력을 만드는 encodeState 는 engine.js 안에 있다. 학습에 쓴 encoding.py 와
    규격이 같아야 하며, parity_check 로 확인할 수 있다. */
 
@@ -23,7 +28,11 @@
   const DEEP_ROOTS = 3;          // 어려움에서 턴 단위 탐색을 적용할 첫 수 개수
   const DEEP_WIDTH = 3;          // 한 턴 내부 각 착수에서 펼칠 후보 폭
   const TURN_NODE_CAP = 64;      // 브라우저용 beam frontier 상한
+  const OPENING_STONE_LIMIT = 8;
+  const OPENING_SCORE_WINDOW = 0.025;
+  const OPENING_SAMPLE_TEMPERATURE = 0.015;
 
+  const gameSymmetries = new WeakMap();
   let sessionPromise = null;
 
   function announce(status, detail) {
@@ -49,17 +58,81 @@
     return sessionPromise;
   }
 
-  async function evaluate(games) {
+  function transformCoord(r, c, n, symmetry) {
+    const m = n - 1;
+    switch (symmetry & 7) {
+      case 0: return [r, c];
+      case 1: return [c, m - r];
+      case 2: return [m - r, m - c];
+      case 3: return [m - c, r];
+      case 4: return [r, m - c];
+      case 5: return [m - c, m - r];
+      case 6: return [m - r, c];
+      case 7: return [c, r];
+      default: return [r, c];
+    }
+  }
+
+  function encodeWithSymmetry(game, symmetry) {
+    const src = encodeState(game);
+    if ((symmetry & 7) === 0) return src;
+
+    const n = game.size;
+    const area = n * n;
+    const out = new Float32Array(src.length);
+
+    for (let p = 0; p < N_PLANES; p++) {
+      const base = p * area;
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          const [tr, tc] = transformCoord(r, c, n, symmetry);
+          out[base + tr * n + tc] = src[base + r * n + c];
+        }
+      }
+    }
+    return out;
+  }
+
+  function restorePolicySymmetry(policy, games, symmetry) {
+    if ((symmetry & 7) === 0) return policy;
+
+    const n = games[0].size;
+    const area = n * n;
+    const stride = area + 1;
+    const restored = new Float32Array(policy.length);
+
+    games.forEach((game, batch) => {
+      const offset = batch * stride;
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          const [tr, tc] = transformCoord(r, c, n, symmetry);
+          restored[offset + r * n + c] = policy[offset + tr * n + tc];
+        }
+      }
+      restored[offset + area] = policy[offset + area];
+    });
+
+    return restored;
+  }
+
+  function symmetryForGame(game, rng = Math.random) {
+    if (!gameSymmetries.has(game)) {
+      gameSymmetries.set(game, Math.floor(rng() * 8) & 7);
+    }
+    return gameSymmetries.get(game);
+  }
+
+  async function evaluate(games, symmetry = 0) {
     const n = games[0].size;
     const planeSize = N_PLANES * n * n;
     const data = new Float32Array(games.length * planeSize);
-    games.forEach((g, k) => data.set(encodeState(g), k * planeSize));
+    games.forEach((g, k) => data.set(encodeWithSymmetry(g, symmetry), k * planeSize));
 
     const sess = await session();
     const tensor = new ort.Tensor('float32', data, [games.length, N_PLANES, n, n]);
     const out = await sess.run({ board: tensor });
     return {
-      policy: out.policy.data,
+      policy: restorePolicySymmetry(out.policy.data, games, symmetry),
       value: out.value.data,
       stride: n * n + 1,
     };
@@ -207,6 +280,22 @@
       const remaining = windows.filter((window) => !window.includes(cell));
       return canCover(remaining, moves - 1);
     });
+  }
+
+  function boardStoneCount(game) {
+    let count = 0;
+    for (const cell of game.board) if (cell !== 0) count++;
+    return count;
+  }
+
+  function canVaryOpening(game) {
+    if (boardStoneCount(game) > OPENING_STONE_LIMIT) return false;
+
+    const own = oneTurnWinningWindows(game, game.current);
+    if (own.length) return false;
+
+    const foe = oneTurnWinningWindows(game, otherColor(game.current));
+    return foe.length === 0;
   }
 
   function candidateActions(game, probs, width) {
@@ -420,7 +509,7 @@
    * returnPlan=true면 어려움에서 최종 첫 수 대신 이번 턴의 전체 착수 수열을 돌려준다.
    */
   async function pickWithLookahead(
-    game, probs, width, evaluateFn, deep = false, returnPlan = false
+    game, probs, width, evaluateFn, deep = false, returnPlan = false, options = {}
   ) {
     const n = game.size;
     const rootColor = game.current;
@@ -535,22 +624,43 @@
       }
     }
 
-    let best;
-    if (deepPlans && deepPlans.size) {
-      // 어려움에서는 실제 턴 전체를 검토한 후보끼리만 최종 비교한다.
-      const indices = [...deepPlans.keys()];
-      best = indices[0];
-      for (const k of indices.slice(1)) {
-        const a = scores[k] + POLICY_BLEND * probs[actions[k]];
-        const b = scores[best] + POLICY_BLEND * probs[actions[best]];
-        if (a > b) best = k;
-      }
-    } else {
-      best = 0;
-      for (let k = 1; k < actions.length; k++) {
-        const a = scores[k] + POLICY_BLEND * probs[actions[k]];
-        const b = scores[best] + POLICY_BLEND * probs[actions[best]];
-        if (a > b) best = k;
+    const indices = deepPlans && deepPlans.size
+      ? [...deepPlans.keys()]
+      : actions.map((_, k) => k);
+    const finalScore = (k) => scores[k] + POLICY_BLEND * probs[actions[k]];
+
+    let best = indices[0];
+    for (const k of indices.slice(1)) {
+      if (finalScore(k) > finalScore(best)) best = k;
+    }
+
+    if (
+      deep &&
+      options.openingVariation &&
+      canVaryOpening(game) &&
+      actions[best] !== n * n
+    ) {
+      const bestScore = finalScore(best);
+      const nearby = indices.filter((k) => (
+        actions[k] !== n * n &&
+        bestScore - finalScore(k) <= OPENING_SCORE_WINDOW
+      ));
+
+      if (nearby.length > 1) {
+        const rng = options.rng || Math.random;
+        const weights = nearby.map((k) => Math.exp(
+          (finalScore(k) - bestScore) / OPENING_SAMPLE_TEMPERATURE
+        ));
+        const total = weights.reduce((sum, value) => sum + value, 0);
+        let roll = rng() * total;
+
+        for (let i = 0; i < nearby.length; i++) {
+          roll -= weights[i];
+          if (roll <= 0) {
+            best = nearby[i];
+            break;
+          }
+        }
       }
     }
 
@@ -570,7 +680,7 @@
     return actions[best];
   }
 
-  async function planTurnWithModel(game, level, evaluateFn) {
+  async function planTurnWithModel(game, level, evaluateFn, options = {}) {
     const n = game.size;
     const endIndex = n * n;
     const temperature = level.temperature || 0;
@@ -593,7 +703,7 @@
       const { policy, stride } = await evaluateFn([sim]);
       const probs = legalProbs(policy, sim, 0, stride);
       const plan = await pickWithLookahead(
-        sim, probs, width, evaluateFn, true, true
+        sim, probs, width, evaluateFn, true, true, options
       );
 
       for (const index of plan.turnActions) {
@@ -645,8 +755,15 @@
       announce('failed', msg);
       throw new Error(msg);
     }
+
     const level = (typeof window.AI_LEVEL === 'function' ? window.AI_LEVEL() : null) || {};
-    return planTurnWithModel(game, level, evaluate);
+    const symmetry = symmetryForGame(game);
+    const evaluateForGame = (games) => evaluate(games, symmetry);
+
+    return planTurnWithModel(game, level, evaluateForGame, {
+      openingVariation: true,
+      rng: Math.random,
+    });
   };
 
   session()
@@ -674,6 +791,12 @@
       findImmediateWin,
       expandWholeTurn,
       tacticalLeafValue,
+      transformCoord,
+      encodeWithSymmetry,
+      restorePolicySymmetry,
+      symmetryForGame,
+      boardStoneCount,
+      canVaryOpening,
     };
   }
 })();
