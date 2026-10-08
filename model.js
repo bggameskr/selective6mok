@@ -10,11 +10,9 @@
      어려움 6갈래 — 상위 후보에서 현재 턴 전체와 상대 턴 전체를 제한 탐색
    어려움은 한 번 고른 현재 턴의 수열을 그대로 실행해 같은 턴 안에서 재탐색하지 않는다.
 
-   웹에서는 게임마다 D4 대칭 하나를 고정해 모델에 보여주는 방향을 바꾼다.
-   빈 판에서 AI가 먼저 두는 경우에는 선택한 턴 수열 자체를 게임별 대칭으로 변환해
-   같은 좌표의 오프닝이 반복되지 않게 한다. 보통/어려움의 초반에는 탐색 점수가
-   최고점과 거의 같은 후보들만 제한적으로 샘플링한다. 강제승/강제방어와 중후반
-   선택은 결정적으로 유지한다.
+   초반 5개 돌까지는 모델+탐색 점수 기준 상위 후보들 중 최소 2개, 최대 3개를
+   오프닝 후보로 삼아 순위 가중 랜덤 선택한다. 임의 좌표 이동이나 대칭 강제 변환은
+   하지 않으며, 강제승/강제방어와 중후반 선택은 결정적으로 유지한다.
 
    입력을 만드는 encodeState 는 engine.js 안에 있다. 학습에 쓴 encoding.py 와
    규격이 같아야 하며, parity_check 로 확인할 수 있다. */
@@ -31,7 +29,9 @@
   const TURN_NODE_CAP = 64;      // 브라우저용 beam frontier 상한
   const OPENING_STONE_LIMIT = 5;
   const OPENING_SCORE_WINDOW = 0.025;
-  const OPENING_SAMPLE_TEMPERATURE = 0.015;
+  const OPENING_MIN_CANDIDATES = 2;
+  const OPENING_MAX_CANDIDATES = 3;
+  const OPENING_RANK_WEIGHTS = [0.55, 0.30, 0.15];
 
   const gameSymmetries = new WeakMap();
   let lastOpeningFirstIndex = -1;
@@ -687,17 +687,23 @@
       canVaryOpening(game) &&
       actions[best] !== n * n
     ) {
-      const bestScore = finalScore(best);
-      const nearby = indices.filter((k) => (
-        actions[k] !== n * n &&
-        bestScore - finalScore(k) <= OPENING_SCORE_WINDOW
-      ));
+      const rankedOpening = indices
+        .filter((k) => actions[k] !== n * n)
+        .sort((a, b) => finalScore(b) - finalScore(a));
 
-      if (nearby.length > 1) {
+      if (rankedOpening.length > 1) {
+        const bestScore = finalScore(rankedOpening[0]);
+        const nearby = rankedOpening
+          .filter((k) => bestScore - finalScore(k) <= OPENING_SCORE_WINDOW)
+          .slice(0, OPENING_MAX_CANDIDATES);
+
+        for (const k of rankedOpening) {
+          if (nearby.length >= Math.min(OPENING_MIN_CANDIDATES, rankedOpening.length)) break;
+          if (!nearby.includes(k)) nearby.push(k);
+        }
+
         const rng = options.rng || Math.random;
-        const weights = nearby.map((k) => Math.exp(
-          (finalScore(k) - bestScore) / OPENING_SAMPLE_TEMPERATURE
-        ));
+        const weights = nearby.map((_, i) => OPENING_RANK_WEIGHTS[i] || 0.1);
         const total = weights.reduce((sum, value) => sum + value, 0);
         let roll = rng() * total;
 
@@ -806,22 +812,9 @@
     }
 
     const level = (typeof window.AI_LEVEL === 'function' ? window.AI_LEVEL() : null) || {};
-    const pristineOpening = boardStoneCount(game) === 0 && !gameSymmetries.has(game);
 
-    if (pristineOpening) {
-      // 빈 판은 회전/반사해도 입력이 동일하다. 따라서 먼저 정규 방향으로 계획한 뒤
-      // 턴 수열 자체를 역대칭으로 옮겨 실제 착수 위치가 게임마다 달라지게 한다.
-      const moves = await planTurnWithModel(game, level, evaluate, {
-        openingVariation: true,
-        rng: Math.random,
-      });
-      const symmetry = chooseOpeningSymmetry(moves, game.size, Math.random);
-      gameSymmetries.set(game, symmetry);
-      return transformMoves(moves, game.size, inverseSymmetry(symmetry));
-    }
-
-    // 첫 수 이후에도 5개 돌까지는 모델이 근접 최적이라고 본 후보들 사이에서만 다양화한다.
-    // 전술 수읽기는 원래 좌표계에서 평가해 D4 방향별 편차의 영향을 받지 않게 한다.
+    // 첫 수부터 5개 돌까지 모두 실제 모델/탐색 후보 중에서만 다양화한다.
+    // 대칭이나 좌표 이동으로 모델이 고르지 않은 자리를 강제로 만들지 않는다.
     return planTurnWithModel(game, level, evaluate, {
       openingVariation: true,
       rng: Math.random,
