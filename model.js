@@ -29,7 +29,7 @@
   const DEEP_ROOTS = 3;          // 어려움에서 턴 단위 탐색을 적용할 첫 수 개수
   const DEEP_WIDTH = 3;          // 한 턴 내부 각 착수에서 펼칠 후보 폭
   const TURN_NODE_CAP = 64;      // 브라우저용 beam frontier 상한
-  const OPENING_STONE_LIMIT = 8;
+  const OPENING_STONE_LIMIT = 5;
   const OPENING_SCORE_WINDOW = 0.025;
   const OPENING_SAMPLE_TEMPERATURE = 0.015;
 
@@ -820,8 +820,12 @@
       return transformMoves(moves, game.size, inverseSymmetry(symmetry));
     }
 
-    // Keep opening variation, but use the original board orientation for tactical play.
-    return planTurnWithModel(game, level, evaluate);
+    // 첫 수 이후에도 5개 돌까지는 모델이 근접 최적이라고 본 후보들 사이에서만 다양화한다.
+    // 전술 수읽기는 원래 좌표계에서 평가해 D4 방향별 편차의 영향을 받지 않게 한다.
+    return planTurnWithModel(game, level, evaluate, {
+      openingVariation: true,
+      rng: Math.random,
+    });
   };
 
   session()
