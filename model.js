@@ -167,6 +167,26 @@
     return symmetry;
   }
 
+  // A central opening is unchanged by D4 symmetry. Translate the entire
+  // opening sequence slightly as well, keeping its relative shape intact.
+  function diversifyOpening(moves, n, rng = Math.random) {
+    if (!moves.length) return moves;
+    const candidates = [];
+    for (let dr = -2; dr <= 2; dr++) {
+      for (let dc = -2; dc <= 2; dc++) {
+        if (moves.some(([r, c]) => r + dr < 0 || r + dr >= n || c + dc < 0 || c + dc >= n)) continue;
+        const [r, c] = moves[0];
+        const first = (r + dr) * n + c + dc;
+        if (first === lastOpeningFirstIndex) continue;
+        candidates.push({ dr, dc, first });
+      }
+    }
+    if (!candidates.length) return moves;
+    const pick = candidates[Math.floor(rng() * candidates.length)];
+    lastOpeningFirstIndex = pick.first;
+    return moves.map(([r, c]) => [r + pick.dr, c + pick.dc]);
+  }
+
   async function evaluate(games, symmetry = 0) {
     const n = games[0].size;
     const planeSize = N_PLANES * n * n;
@@ -817,7 +837,11 @@
       });
       const symmetry = chooseOpeningSymmetry(moves, game.size, Math.random);
       gameSymmetries.set(game, symmetry);
-      return transformMoves(moves, game.size, inverseSymmetry(symmetry));
+      return diversifyOpening(
+        transformMoves(moves, game.size, inverseSymmetry(symmetry)),
+        game.size,
+        Math.random
+      );
     }
 
     // Keep opening variation, but use the original board orientation for tactical play.
