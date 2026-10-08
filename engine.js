@@ -160,6 +160,7 @@ class SixMok {
 
 const N_PLANES = 16;
 const STONE_SCALE = 6;
+const STONE_CAP = 12;
 
 /** 각 자리가 color 에게 얼마나 위험한/유망한 자리인지.
 
@@ -231,9 +232,9 @@ function encodeState(game) {
     else if (v === foe) data[plane + i] = 1;
   }
 
-  data.fill(Math.min(game.stones[me], STONE_SCALE) / STONE_SCALE, 2 * plane, 3 * plane);
+  data.fill(Math.min(game.stones[me], STONE_CAP) / STONE_SCALE, 2 * plane, 3 * plane);
   data.fill(game.placedThisTurn / game.config.maxPlacesPerTurn, 3 * plane, 4 * plane);
-  data.fill(Math.min(game.stones[foe], STONE_SCALE) / STONE_SCALE, 4 * plane, 5 * plane);
+  data.fill(Math.min(game.stones[foe], STONE_CAP) / STONE_SCALE, 4 * plane, 5 * plane);
   data.fill(me === BLACK ? 1 : 0, 5 * plane, 6 * plane);
 
   for (const [offset, color] of [[6, me], [11, foe]]) {
