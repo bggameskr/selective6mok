@@ -11,8 +11,9 @@
    어려움은 한 번 고른 현재 턴의 수열을 그대로 실행해 같은 턴 안에서 재탐색하지 않는다.
 
    초반 5개 돌까지는 모델+탐색 점수 기준 상위 후보들 중 최소 2개, 최대 3개를
-   오프닝 후보로 삼아 순위 가중 랜덤 선택한다. 임의 좌표 이동이나 대칭 강제 변환은
-   하지 않으며, 강제승/강제방어와 중후반 선택은 결정적으로 유지한다.
+   오프닝 후보로 삼아 순위 가중 랜덤 선택한다. 빈 판의 첫 턴에는 모델이 선택한
+   오프닝 수열 전체에 D4 회전/반사만 적용해 대칭적으로 동등한 시작도 허용한다.
+   임의 평행이동은 하지 않으며, 강제승/강제방어와 중후반 선택은 결정적으로 유지한다.
 
    입력을 만드는 encodeState 는 engine.js 안에 있다. 학습에 쓴 encoding.py 와
    규격이 같아야 하며, parity_check 로 확인할 수 있다. */
@@ -812,9 +813,21 @@
     }
 
     const level = (typeof window.AI_LEVEL === 'function' ? window.AI_LEVEL() : null) || {};
+    const pristineOpening = boardStoneCount(game) === 0;
 
-    // 첫 수부터 5개 돌까지 모두 실제 모델/탐색 후보 중에서만 다양화한다.
-    // 대칭이나 좌표 이동으로 모델이 고르지 않은 자리를 강제로 만들지 않는다.
+    if (pristineOpening) {
+      // 빈 판에서는 모델이 실제로 선택한 오프닝 수열에 회전/반사만 적용한다.
+      // D4 대칭은 게임적으로 동등하므로 임의 평행이동과 달리 수의 의미를 보존한다.
+      const moves = await planTurnWithModel(game, level, evaluate, {
+        openingVariation: true,
+        rng: Math.random,
+      });
+      const symmetry = chooseOpeningSymmetry(moves, game.size, Math.random);
+      gameSymmetries.set(game, symmetry);
+      return transformMoves(moves, game.size, inverseSymmetry(symmetry));
+    }
+
+    // 첫 턴 이후 5개 돌까지는 실제 모델/탐색 후보 중에서만 다양화한다.
     return planTurnWithModel(game, level, evaluate, {
       openingVariation: true,
       rng: Math.random,
