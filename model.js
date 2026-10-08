@@ -674,13 +674,16 @@
       : actions.map((_, k) => k);
     const finalScore = (k) => scores[k] + POLICY_BLEND * probs[actions[k]];
 
-    let best = indices[0];
-    for (const k of indices.slice(1)) {
+    const winningIndices = indices.filter((k) => scores[k] >= 1);
+    const rankedIndices = winningIndices.length ? winningIndices : indices;
+    let best = rankedIndices[0];
+    for (const k of rankedIndices.slice(1)) {
       if (finalScore(k) > finalScore(best)) best = k;
     }
 
     if (
       options.openingVariation &&
+      !winningIndices.length &&
       canVaryOpening(game) &&
       actions[best] !== n * n
     ) {
@@ -817,13 +820,8 @@
       return transformMoves(moves, game.size, inverseSymmetry(symmetry));
     }
 
-    const symmetry = symmetryForGame(game);
-    const evaluateForGame = (games) => evaluate(games, symmetry);
-
-    return planTurnWithModel(game, level, evaluateForGame, {
-      openingVariation: true,
-      rng: Math.random,
-    });
+    // Keep opening variation, but use the original board orientation for tactical play.
+    return planTurnWithModel(game, level, evaluate);
   };
 
   session()
