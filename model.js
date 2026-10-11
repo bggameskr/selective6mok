@@ -10,10 +10,8 @@
      어려움 6갈래 — 상위 후보에서 현재 턴 전체와 상대 턴 전체를 제한 탐색
    어려움은 한 번 고른 현재 턴의 수열을 그대로 실행해 같은 턴 안에서 재탐색하지 않는다.
 
-   초반 5개 돌까지는 모델+탐색 점수 기준 상위 후보들 중 최소 2개, 최대 3개를
-   오프닝 후보로 삼아 순위 가중 랜덤 선택한다. 빈 판의 첫 턴에는 모델이 선택한
-   오프닝 수열 전체에 D4 회전/반사만 적용해 대칭적으로 동등한 시작도 허용한다.
-   임의 평행이동은 하지 않으며, 강제승/강제방어와 중후반 선택은 결정적으로 유지한다.
+   오프닝을 별도로 변형하거나 대칭 이동하지 않는다. 모델과 난이도별 탐색이 고른 수를
+   그대로 사용한다.
 
    입력을 만드는 encodeState 는 engine.js 안에 있다. 학습에 쓴 encoding.py 와
    규격이 같아야 하며, parity_check 로 확인할 수 있다. */
@@ -28,14 +26,7 @@
   const DEEP_ROOTS = 3;          // 어려움에서 턴 단위 탐색을 적용할 첫 수 개수
   const DEEP_WIDTH = 3;          // 한 턴 내부 각 착수에서 펼칠 후보 폭
   const TURN_NODE_CAP = 64;      // 브라우저용 beam frontier 상한
-  const OPENING_STONE_LIMIT = 5;
-  const OPENING_SCORE_WINDOW = 0.025;
-  const OPENING_MIN_CANDIDATES = 2;
-  const OPENING_MAX_CANDIDATES = 3;
-  const OPENING_RANK_WEIGHTS = [0.55, 0.30, 0.15];
 
-  const gameSymmetries = new WeakMap();
-  let lastOpeningFirstIndex = -1;
   let sessionPromise = null;
 
   function announce(status, detail) {
@@ -61,124 +52,17 @@
     return sessionPromise;
   }
 
-  function transformCoord(r, c, n, symmetry) {
-    const m = n - 1;
-    switch (symmetry & 7) {
-      case 0: return [r, c];
-      case 1: return [c, m - r];
-      case 2: return [m - r, m - c];
-      case 3: return [m - c, r];
-      case 4: return [r, m - c];
-      case 5: return [m - c, m - r];
-      case 6: return [m - r, c];
-      case 7: return [c, r];
-      default: return [r, c];
-    }
-  }
-
-  function inverseSymmetry(symmetry) {
-    switch (symmetry & 7) {
-      case 1: return 3;
-      case 3: return 1;
-      default: return symmetry & 7;
-    }
-  }
-
-  function transformMoves(moves, n, symmetry) {
-    return moves.map(([r, c]) => transformCoord(r, c, n, symmetry));
-  }
-
-  function encodeWithSymmetry(game, symmetry) {
-    const src = encodeState(game);
-    if ((symmetry & 7) === 0) return src;
-
-    const n = game.size;
-    const area = n * n;
-    const out = new Float32Array(src.length);
-
-    for (let p = 0; p < N_PLANES; p++) {
-      const base = p * area;
-      for (let r = 0; r < n; r++) {
-        for (let c = 0; c < n; c++) {
-          const [tr, tc] = transformCoord(r, c, n, symmetry);
-          out[base + tr * n + tc] = src[base + r * n + c];
-        }
-      }
-    }
-    return out;
-  }
-
-  function restorePolicySymmetry(policy, games, symmetry) {
-    if ((symmetry & 7) === 0) return policy;
-
-    const n = games[0].size;
-    const area = n * n;
-    const stride = area + 1;
-    const restored = new Float32Array(policy.length);
-
-    games.forEach((game, batch) => {
-      const offset = batch * stride;
-      for (let r = 0; r < n; r++) {
-        for (let c = 0; c < n; c++) {
-          const [tr, tc] = transformCoord(r, c, n, symmetry);
-          restored[offset + r * n + c] = policy[offset + tr * n + tc];
-        }
-      }
-      restored[offset + area] = policy[offset + area];
-    });
-
-    return restored;
-  }
-
-  function symmetryForGame(game, rng = Math.random) {
-    if (!gameSymmetries.has(game)) {
-      gameSymmetries.set(game, Math.floor(rng() * 8) & 7);
-    }
-    return gameSymmetries.get(game);
-  }
-
-  function chooseOpeningSymmetry(moves, n, rng = Math.random) {
-    const candidates = [];
-    const fallback = [];
-
-    for (let symmetry = 0; symmetry < 8; symmetry++) {
-      fallback.push(symmetry);
-      if (!moves.length) {
-        candidates.push(symmetry);
-        continue;
-      }
-
-      const [r, c] = transformCoord(
-        moves[0][0], moves[0][1], n, inverseSymmetry(symmetry)
-      );
-      const index = r * n + c;
-      if (index !== lastOpeningFirstIndex) candidates.push(symmetry);
-    }
-
-    const pool = candidates.length ? candidates : fallback;
-    const symmetry = pool[Math.floor(rng() * pool.length) % pool.length];
-
-    if (moves.length) {
-      const [r, c] = transformCoord(
-        moves[0][0], moves[0][1], n, inverseSymmetry(symmetry)
-      );
-      lastOpeningFirstIndex = r * n + c;
-    }
-
-    return symmetry;
-  }
-
-  async function evaluate(games, symmetry = 0) {
+  async function evaluate(games) {
     const n = games[0].size;
     const planeSize = N_PLANES * n * n;
     const data = new Float32Array(games.length * planeSize);
-    games.forEach((g, k) => data.set(encodeWithSymmetry(g, symmetry), k * planeSize));
+    games.forEach((g, k) => data.set(encodeState(g), k * planeSize));
 
     const sess = await session();
     const tensor = new ort.Tensor('float32', data, [games.length, N_PLANES, n, n]);
     const out = await sess.run({ board: tensor });
     return {
-      policy: restorePolicySymmetry(out.policy.data, games, symmetry),
+      policy: out.policy.data,
       value: out.value.data,
       stride: n * n + 1,
     };
@@ -326,22 +210,6 @@
       const remaining = windows.filter((window) => !window.includes(cell));
       return canCover(remaining, moves - 1);
     });
-  }
-
-  function boardStoneCount(game) {
-    let count = 0;
-    for (const cell of game.board) if (cell !== 0) count++;
-    return count;
-  }
-
-  function canVaryOpening(game) {
-    if (boardStoneCount(game) > OPENING_STONE_LIMIT) return false;
-
-    const own = oneTurnWinningWindows(game, game.current);
-    if (own.length) return false;
-
-    const foe = oneTurnWinningWindows(game, otherColor(game.current));
-    return foe.length === 0;
   }
 
   function candidateActions(game, probs, width) {
@@ -555,7 +423,7 @@
    * returnPlan=true면 어려움에서 최종 첫 수 대신 이번 턴의 전체 착수 수열을 돌려준다.
    */
   async function pickWithLookahead(
-    game, probs, width, evaluateFn, deep = false, returnPlan = false, options = {}
+    game, probs, width, evaluateFn, deep = false, returnPlan = false
   ) {
     const n = game.size;
     const rootColor = game.current;
@@ -682,42 +550,6 @@
       if (finalScore(k) > finalScore(best)) best = k;
     }
 
-    if (
-      options.openingVariation &&
-      !winningIndices.length &&
-      canVaryOpening(game) &&
-      actions[best] !== n * n
-    ) {
-      const rankedOpening = indices
-        .filter((k) => actions[k] !== n * n)
-        .sort((a, b) => finalScore(b) - finalScore(a));
-
-      if (rankedOpening.length > 1) {
-        const bestScore = finalScore(rankedOpening[0]);
-        const nearby = rankedOpening
-          .filter((k) => bestScore - finalScore(k) <= OPENING_SCORE_WINDOW)
-          .slice(0, OPENING_MAX_CANDIDATES);
-
-        for (const k of rankedOpening) {
-          if (nearby.length >= Math.min(OPENING_MIN_CANDIDATES, rankedOpening.length)) break;
-          if (!nearby.includes(k)) nearby.push(k);
-        }
-
-        const rng = options.rng || Math.random;
-        const weights = nearby.map((_, i) => OPENING_RANK_WEIGHTS[i] || 0.1);
-        const total = weights.reduce((sum, value) => sum + value, 0);
-        let roll = rng() * total;
-
-        for (let i = 0; i < nearby.length; i++) {
-          roll -= weights[i];
-          if (roll <= 0) {
-            best = nearby[i];
-            break;
-          }
-        }
-      }
-    }
-
     if (returnPlan) {
       if (deepPlans && deepPlans.has(best)) {
         return {
@@ -757,7 +589,7 @@
       const { policy, stride } = await evaluateFn([sim]);
       const probs = legalProbs(policy, sim, 0, stride);
       const plan = await pickWithLookahead(
-        sim, probs, width, evaluateFn, true, true, options
+        sim, probs, width, evaluateFn, true, true
       );
 
       for (const index of plan.turnActions) {
@@ -787,7 +619,7 @@
       let index;
       if (width > 0) {
         index = await pickWithLookahead(
-          sim, probs, width, evaluateFn, false, false, options
+          sim, probs, width, evaluateFn, false, false
         );
       } else {
         const easyActions = candidateActions(sim, probs, EASY_CANDIDATE_WIDTH);
@@ -813,25 +645,7 @@
     }
 
     const level = (typeof window.AI_LEVEL === 'function' ? window.AI_LEVEL() : null) || {};
-    const pristineOpening = boardStoneCount(game) === 0;
-
-    if (pristineOpening) {
-      // 빈 판에서는 모델이 실제로 선택한 오프닝 수열에 회전/반사만 적용한다.
-      // D4 대칭은 게임적으로 동등하므로 임의 평행이동과 달리 수의 의미를 보존한다.
-      const moves = await planTurnWithModel(game, level, evaluate, {
-        openingVariation: true,
-        rng: Math.random,
-      });
-      const symmetry = chooseOpeningSymmetry(moves, game.size, Math.random);
-      gameSymmetries.set(game, symmetry);
-      return transformMoves(moves, game.size, inverseSymmetry(symmetry));
-    }
-
-    // 첫 턴 이후 5개 돌까지는 실제 모델/탐색 후보 중에서만 다양화한다.
-    return planTurnWithModel(game, level, evaluate, {
-      openingVariation: true,
-      rng: Math.random,
-    });
+    return planTurnWithModel(game, level, evaluate);
   };
 
   session()
@@ -859,15 +673,6 @@
       findImmediateWin,
       expandWholeTurn,
       tacticalLeafValue,
-      transformCoord,
-      inverseSymmetry,
-      transformMoves,
-      encodeWithSymmetry,
-      restorePolicySymmetry,
-      symmetryForGame,
-      chooseOpeningSymmetry,
-      boardStoneCount,
-      canVaryOpening,
     };
   }
 })();
