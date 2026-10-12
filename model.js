@@ -1,13 +1,10 @@
 /* 학습한 모델을 브라우저 게임에 붙인다.
 
-   쓰는 법
-   1. 코랩 노트북에서 받은 sixmok.onnx 를 index.html 과 같은 폴더에 둔다.
-   2. 그 폴더를 웹에 올리거나 간단한 서버로 연다 (file:// 로 열면 모델을 못 읽는다).
-
    난이도에 따라 모델 정책과 가치만으로 제한 탐색한다.
      쉬움   0갈래 — 정책 상위 후보 안에서 온도로 샘플링
      보통   3갈래 — 정책 상위 후보의 1-ply 가치 탐색
      어려움 6갈래 — 상위 후보에서 현재 턴 전체와 상대 턴 전체를 제한 탐색
+   보통/어려움은 탐색 점수에 온도를 적용하고, 각 색의 첫 착수 턴에는 더 높은 온도를 쓴다.
    어려움은 한 번 고른 현재 턴의 수열을 그대로 실행해 같은 턴 안에서 재탐색하지 않는다.
 
    즉시승 강제 선택, 강제방어 후보 삽입, 삼삼/사사 후보 보정, 전술 leaf 값 덮어쓰기를
@@ -28,6 +25,9 @@
   const DEEP_ROOTS = 3;
   const DEEP_WIDTH = 3;
   const TURN_NODE_CAP = 64;
+  const NORMAL_OPENING_TEMPERATURE = 1.0;
+  const HARD_TEMPERATURE = 0.2;
+  const HARD_OPENING_TEMPERATURE = 0.8;
 
   let sessionPromise = null;
 
@@ -75,11 +75,6 @@
     return 1 / (1 + Math.exp(-z));
   }
 
-  /**
-   * 최신 계층형 policy를 결합확률로 바꾼다.
-   * 앞 n*n개는 CONTINUE 이후의 조건부 착점 logits이고,
-   * 마지막 하나는 END_TURN Bernoulli logit이다.
-   */
   function legalProbs(logits, game, offset, stride) {
     const n = game.size;
     const endIndex = n * n;
@@ -140,7 +135,13 @@
     return game.winner === rootColor ? 1 : -1;
   }
 
-  /** 정책값이 사실상 같은 좌표들은 배열 인덱스가 작은 쪽이 계속 이기지 않도록 섞는다. */
+  function hasColorStone(game, color) {
+    for (let i = 0; i < game.board.length; i++) {
+      if (game.board[i] === color) return true;
+    }
+    return false;
+  }
+
   function rankBoardActions(actions, probs, rng = Math.random) {
     const ranked = actions.slice().sort((a, b) => probs[b] - probs[a]);
     if (ranked.length < 2) return ranked;
@@ -179,8 +180,6 @@
       return probs[endIndex] > 0.5 ? [endIndex] : rankedBoard.slice(0, 1);
     }
 
-    // END_TURN을 개별 착점 361개와 직접 순위 비교하지 않는다.
-    // 탐색 폭 하나는 END에 남기고 나머지를 조건부 착점 상위 후보로 채운다.
     return [endIndex, ...rankedBoard.slice(0, limit - 1)];
   }
 
@@ -206,7 +205,6 @@
     return actions[actions.length - 1];
   }
 
-  /** END/CONTINUE를 먼저 고른 뒤, CONTINUE일 때만 착점 위치를 고른다. */
   function chooseHierarchicalAction(probs, actions, endIndex, temperature, rng = Math.random) {
     if (!actions.length) return -1;
 
@@ -228,6 +226,28 @@
     return sampleActions(probs, boardActions, temperature, rng);
   }
 
+  function sampleScoredIndex(indices, scoreFn, temperature, rng = Math.random) {
+    if (!indices.length) return -1;
+    if (!(temperature > 0)) {
+      let best = indices[0];
+      for (const k of indices.slice(1)) {
+        if (scoreFn(k) > scoreFn(best)) best = k;
+      }
+      return best;
+    }
+
+    let maxScore = -Infinity;
+    for (const k of indices) maxScore = Math.max(maxScore, scoreFn(k));
+    const weights = indices.map((k) => Math.exp((scoreFn(k) - maxScore) / temperature));
+    const total = weights.reduce((sum, value) => sum + value, 0);
+    let roll = rng() * total;
+    for (let i = 0; i < indices.length; i++) {
+      roll -= weights[i];
+      if (roll <= 0) return indices[i];
+    }
+    return indices[indices.length - 1];
+  }
+
   async function expandWholeTurn(nodes, turnColor, evaluateFn, width, recordTurnActions = false) {
     let frontier = nodes.slice();
     const done = [];
@@ -241,7 +261,6 @@
           done.push(node);
           continue;
         }
-
         if (!g.canPlace()) {
           const child = g.clone();
           child.play(END_TURN);
@@ -258,7 +277,6 @@
 
       const { policy, stride } = await evaluateFn(active.map((node) => node.game));
       const next = [];
-
       active.forEach((node, j) => {
         const g = node.game;
         const probs = legalProbs(policy, g, j * stride, stride);
@@ -270,7 +288,6 @@
           child.play(toMove(action, g.size));
           const prior = node.prior * Math.max(probs[action], 1e-12);
           const nextNode = { ...node, game: child, prior };
-
           if (recordTurnActions) {
             nextNode.turnActions = (node.turnActions || []).slice();
             if (action !== endIndex) nextNode.turnActions.push(action);
@@ -288,7 +305,6 @@
       if (!g.isOver && g.current === turnColor) g.play(END_TURN);
       done.push({ ...node, game: g });
     }
-
     return done;
   }
 
@@ -317,11 +333,12 @@
   }
 
   async function pickWithLookahead(
-    game, probs, width, evaluateFn, deep = false, returnPlan = false
+    game, probs, width, evaluateFn, deep = false, returnPlan = false,
+    temperature = 0, rng = Math.random
   ) {
     const n = game.size;
     const rootColor = game.current;
-    const actions = candidateActions(game, probs, width);
+    const actions = candidateActions(game, probs, width, rng);
 
     const children = actions.map((action) => {
       const child = game.clone();
@@ -332,7 +349,6 @@
     const scores = new Array(actions.length);
     const pending = [];
     const pendingAt = [];
-
     children.forEach((child, k) => {
       const terminal = rootValue(child, rootColor);
       if (terminal !== null) scores[k] = terminal;
@@ -351,14 +367,9 @@
     }
 
     let deepPlans = null;
-
     if (deep) {
       const expandable = actions
-        .map((action, k) => ({
-          action,
-          k,
-          score: scores[k] + POLICY_BLEND * probs[action],
-        }))
+        .map((action, k) => ({ action, k, score: scores[k] + POLICY_BLEND * probs[action] }))
         .filter(({ k }) => !children[k].isOver)
         .sort((a, b) => b.score - a.score)
         .slice(0, DEEP_ROOTS);
@@ -383,7 +394,6 @@
           ? await expandWholeTurn(stillRootTurn, rootColor, evaluateFn, DEEP_WIDTH, true)
           : []
       );
-
       rootTurnEnds.forEach((node, seqId) => { node.seqId = seqId; });
 
       const terminalRootEnds = [];
@@ -400,7 +410,6 @@
 
       const allLeaves = terminalRootEnds.concat(opponentTurnEnds);
       const leafScores = await evaluateLeaves(allLeaves, rootColor, evaluateFn);
-
       const seqWorst = new Map();
       allLeaves.forEach((node, i) => {
         const prev = seqWorst.get(node.seqId);
@@ -427,16 +436,16 @@
       }
     }
 
-    const indices = deepPlans && deepPlans.size
-      ? [...deepPlans.keys()]
-      : actions.map((_, k) => k);
+    const indices = deepPlans && deepPlans.size ? [...deepPlans.keys()] : actions.map((_, k) => k);
     const finalScore = (k) => scores[k] + POLICY_BLEND * probs[actions[k]];
-
     const terminalWins = indices.filter((k) => rootValue(children[k], rootColor) === 1);
     const rankedIndices = terminalWins.length ? terminalWins : indices;
-    let best = rankedIndices[0];
-    for (const k of rankedIndices.slice(1)) {
-      if (finalScore(k) > finalScore(best)) best = k;
+
+    let best = sampleScoredIndex(rankedIndices, finalScore, 0, rng);
+    const endIndex = n * n;
+    if (temperature > 0 && best >= 0 && actions[best] !== endIndex) {
+      const boardIndices = rankedIndices.filter((k) => actions[k] !== endIndex);
+      if (boardIndices.length) best = sampleScoredIndex(boardIndices, finalScore, temperature, rng);
     }
 
     if (returnPlan) {
@@ -448,20 +457,29 @@
       }
       return {
         action: actions[best],
-        turnActions: actions[best] === n * n ? [] : [actions[best]],
+        turnActions: actions[best] === endIndex ? [] : [actions[best]],
       };
     }
-
     return actions[best];
   }
 
   async function planTurnWithModel(game, level, evaluateFn, options = {}) {
     const n = game.size;
     const endIndex = n * n;
-    const temperature = level.temperature || 0;
+    const configuredTemperature = level.temperature || 0;
     const width = level.lookahead || 0;
     const deep = width >= 6;
+    const openingTurn = game.placedThisTurn === 0 && !hasColorStone(game, game.current);
     const rng = options.rng || Math.random;
+
+    let temperature = configuredTemperature;
+    if (deep) {
+      temperature = openingTurn
+        ? HARD_OPENING_TEMPERATURE
+        : Math.max(configuredTemperature, HARD_TEMPERATURE);
+    } else if (width > 0 && openingTurn) {
+      temperature = Math.max(configuredTemperature, NORMAL_OPENING_TEMPERATURE);
+    }
 
     const sim = game.clone();
     const moves = [];
@@ -469,7 +487,9 @@
     if (deep) {
       const { policy, stride } = await evaluateFn([sim]);
       const probs = legalProbs(policy, sim, 0, stride);
-      const plan = await pickWithLookahead(sim, probs, width, evaluateFn, true, true);
+      const plan = await pickWithLookahead(
+        sim, probs, width, evaluateFn, true, true, temperature, rng
+      );
 
       for (const index of plan.turnActions) {
         if (index === endIndex || !sim.canPlace()) break;
@@ -488,7 +508,9 @@
 
       let index;
       if (width > 0) {
-        index = await pickWithLookahead(sim, probs, width, evaluateFn, false, false);
+        index = await pickWithLookahead(
+          sim, probs, width, evaluateFn, false, false, temperature, rng
+        );
       } else {
         const easyActions = candidateActions(sim, probs, EASY_CANDIDATE_WIDTH, rng);
         index = chooseHierarchicalAction(probs, easyActions, endIndex, temperature, rng);
@@ -501,7 +523,6 @@
       moves.push([r, c]);
       if (sim.isOver) break;
     }
-
     return moves;
   }
 
@@ -535,8 +556,10 @@
       rankBoardActions,
       sampleActions,
       chooseHierarchicalAction,
+      sampleScoredIndex,
       expandWholeTurn,
       evaluateLeaves,
+      hasColorStone,
     };
   }
 })();
