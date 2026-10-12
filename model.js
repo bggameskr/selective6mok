@@ -526,6 +526,177 @@
     return moves;
   }
 
+  function actionIndex(move, n) {
+    return move === END_TURN ? n * n : move[0] * n + move[1];
+  }
+
+  function policyRank(probs, game, selected) {
+    const endIndex = game.size * game.size;
+    const legal = [];
+    for (let i = 0; i < endIndex; i++) {
+      if (game.board[i] === EMPTY) legal.push(i);
+    }
+    if (!game.canPlace() || game.canPlace()) legal.push(endIndex);
+    legal.sort((a, b) => probs[b] - probs[a]);
+    const rank = legal.indexOf(selected);
+    return rank < 0 ? null : rank + 1;
+  }
+
+  function moveJson(move, n) {
+    if (move === END_TURN) return { type: 'end_turn', index: n * n };
+    return {
+      type: 'place',
+      row: move[0],
+      col: move[1],
+      row1: move[0] + 1,
+      col1: move[1] + 1,
+      index: move[0] * n + move[1],
+    };
+  }
+
+  async function buildKifu(game) {
+    if (!game) throw new Error('진행 중인 대국이 없습니다.');
+    if (game.size !== MODEL_BOARD_SIZE) {
+      throw new Error(`모델 가중치는 ${MODEL_BOARD_SIZE}줄 판에서만 저장할 수 있습니다.`);
+    }
+
+    const history = game.history.map(([color, move]) => [
+      color,
+      Array.isArray(move) ? [move[0], move[1]] : move,
+    ]);
+    const replay = new SixMok({ ...game.config });
+    const states = [];
+    let turnIndex = 1;
+
+    for (const [color, move] of history) {
+      states.push({
+        game: replay.clone(),
+        color,
+        move,
+        turnIndex,
+      });
+      replay.play(move);
+      if (move === END_TURN) turnIndex += 1;
+    }
+
+    let policy = new Float32Array(0);
+    let value = new Float32Array(0);
+    let stride = game.size * game.size + 1;
+    if (states.length) {
+      const out = await evaluate(states.map((entry) => entry.game));
+      policy = out.policy;
+      value = out.value;
+      stride = out.stride;
+    }
+
+    const actions = states.map((entry, i) => {
+      const state = entry.game;
+      const offset = i * stride;
+      const probs = legalProbs(policy, state, offset, stride);
+      const selected = actionIndex(entry.move, state.size);
+      const endIndex = state.size * state.size;
+      let best = endIndex;
+      for (let k = 0; k < stride; k++) {
+        if (probs[k] > probs[best]) best = k;
+      }
+
+      return {
+        ply: i + 1,
+        turn: entry.turnIndex,
+        color: state.current,
+        history_color: entry.color,
+        action_in_turn: entry.move === END_TURN ? 'end' : state.placedThisTurn + 1,
+        move: moveJson(entry.move, state.size),
+        stones_before: {
+          black: state.stones[BLACK],
+          white: state.stones[WHITE],
+        },
+        placed_this_turn_before: state.placedThisTurn,
+        value: Number(value[i]),
+        selected_policy_logit: Number(policy[offset + selected]),
+        selected_policy_prob: Number(probs[selected]),
+        selected_policy_rank: policyRank(probs, state, selected),
+        best_policy_action: moveJson(toMove(best, state.size), state.size),
+        best_policy_prob: Number(probs[best]),
+        end_turn_logit: Number(policy[offset + endIndex]),
+        end_turn_prob: Number(probs[endIndex]),
+        policy_logits: Array.from(policy.slice(offset, offset + endIndex), Number),
+        policy_probs: Array.from(probs.slice(0, endIndex), Number),
+      };
+    });
+
+    const level = typeof window.AI_LEVEL === 'function' ? window.AI_LEVEL() : null;
+    const side = document.getElementById('side');
+    return {
+      format: 'selective6mok-web-kifu-v1',
+      created_at: new Date().toISOString(),
+      model: MODEL_URL,
+      note: 'policy 값은 신경망 원출력과 합법수 기준 확률입니다. 탐색/lookahead 최종 점수는 포함하지 않습니다.',
+      board_size: game.size,
+      config: { ...game.config },
+      difficulty: level ? {
+        label: level.label || null,
+        lookahead: level.lookahead || 0,
+        temperature: level.temperature || 0,
+      } : null,
+      human_color: side ? Number(side.value) : null,
+      actions,
+      result: {
+        winner: game.winner,
+        is_draw: game.isDraw,
+        is_over: game.isOver,
+        stones_on_board: game.stonesOnBoard,
+      },
+    };
+  }
+
+  async function downloadKifu() {
+    const game = typeof window.__game === 'function' ? window.__game() : null;
+    const kifu = await buildKifu(game);
+    const blob = new Blob([JSON.stringify(kifu)], { type: 'application/json;charset=utf-8' });
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `sixmok-kifu-${stamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  function installKifuButton() {
+    if (document.getElementById('kifu-download')) return;
+    const actions = document.querySelector('.rail .actions');
+    if (!actions) return;
+
+    const button = document.createElement('button');
+    button.id = 'kifu-download';
+    button.type = 'button';
+    button.textContent = '기보 다운로드';
+    button.title = '현재 대국과 각 행동 직전의 모델 policy/value를 JSON으로 저장합니다.';
+    button.style.width = '100%';
+    actions.insertAdjacentElement('afterend', button);
+
+    button.addEventListener('click', async () => {
+      const previous = button.textContent;
+      button.disabled = true;
+      button.textContent = '기보 만드는 중…';
+      try {
+        await downloadKifu();
+      } catch (err) {
+        console.error('기보 다운로드 실패', err);
+        window.alert(`기보를 만들지 못했습니다: ${err.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = previous;
+      }
+    });
+  }
+
+  window.MODEL_BUILD_KIFU = buildKifu;
+  window.MODEL_DOWNLOAD_KIFU = downloadKifu;
+
   window.MODEL_PLAN_TURN = async (game) => {
     if (game.size !== MODEL_BOARD_SIZE) {
       const msg = `모델은 ${MODEL_BOARD_SIZE}줄 판으로만 학습돼 있습니다.`;
@@ -536,6 +707,8 @@
     const level = (typeof window.AI_LEVEL === 'function' ? window.AI_LEVEL() : null) || {};
     return planTurnWithModel(game, level, evaluate);
   };
+
+  installKifuButton();
 
   session()
     .then(() => {
@@ -560,6 +733,7 @@
       expandWholeTurn,
       evaluateLeaves,
       hasColorStone,
+      buildKifu,
     };
   }
 })();
