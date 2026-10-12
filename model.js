@@ -23,6 +23,7 @@
   const MODEL_URL = 'sixmok.onnx';
   const MODEL_BOARD_SIZE = 19;
   const POLICY_BLEND = 0.1;
+  const POLICY_TIE_REL_EPS = 1e-5;
   const EASY_CANDIDATE_WIDTH = 8;
   const DEEP_ROOTS = 3;
   const DEEP_WIDTH = 3;
@@ -69,27 +70,59 @@
     };
   }
 
+  function sigmoid(value) {
+    const z = Math.max(-60, Math.min(60, Number.isFinite(value) ? value : 0));
+    return 1 / (1 + Math.exp(-z));
+  }
+
+  /**
+   * 최신 계층형 policy를 결합확률로 바꾼다.
+   * 앞 n*n개는 CONTINUE 이후의 조건부 착점 logits이고,
+   * 마지막 하나는 END_TURN Bernoulli logit이다.
+   */
   function legalProbs(logits, game, offset, stride) {
     const n = game.size;
     const endIndex = n * n;
     const probs = new Float64Array(stride);
-    let max = -Infinity;
 
-    for (let i = 0; i <= endIndex; i++) {
-      if (i < endIndex && game.board[i] !== 0) continue;
-      if (i < endIndex && !game.canPlace()) continue;
-      const v = logits[offset + i];
+    if (!game.canPlace()) {
+      probs[endIndex] = 1;
+      return probs;
+    }
+
+    const boardLegal = [];
+    let max = -Infinity;
+    for (let i = 0; i < endIndex; i++) {
+      if (game.board[i] !== 0) continue;
+      boardLegal.push(i);
+      const raw = logits[offset + i];
+      const v = Number.isFinite(raw) ? raw : -1e9;
       if (v > max) max = v;
     }
 
+    if (!boardLegal.length) {
+      probs[endIndex] = 1;
+      return probs;
+    }
+
     let total = 0;
-    for (let i = 0; i <= endIndex; i++) {
-      if (i < endIndex && (game.board[i] !== 0 || !game.canPlace())) continue;
-      const e = Math.exp(logits[offset + i] - max);
+    for (const i of boardLegal) {
+      const raw = logits[offset + i];
+      const v = Number.isFinite(raw) ? raw : -1e9;
+      const e = Math.exp(v - max);
       probs[i] = e;
       total += e;
     }
-    for (let i = 0; i <= endIndex; i++) probs[i] /= total;
+
+    if (!(total > 0) || !Number.isFinite(total)) {
+      total = boardLegal.length;
+      for (const i of boardLegal) probs[i] = 1;
+    }
+
+    const pEnd = sigmoid(logits[offset + endIndex]);
+    const continueMass = 1 - pEnd;
+    for (const i of boardLegal) probs[i] = continueMass * probs[i] / total;
+    probs[endIndex] = pEnd;
     return probs;
   }
 
@@ -107,17 +140,48 @@
     return game.winner === rootColor ? 1 : -1;
   }
 
-  function candidateActions(game, probs, width) {
+  /** 정책값이 사실상 같은 좌표들은 배열 인덱스가 작은 쪽이 계속 이기지 않도록 섞는다. */
+  function rankBoardActions(actions, probs, rng = Math.random) {
+    const ranked = actions.slice().sort((a, b) => probs[b] - probs[a]);
+    if (ranked.length < 2) return ranked;
+
+    const maxProb = Math.max(...ranked.map((action) => Math.abs(probs[action])));
+    const tolerance = Math.max(1e-12, maxProb * POLICY_TIE_REL_EPS);
+
+    let start = 0;
+    while (start < ranked.length) {
+      const anchor = probs[ranked[start]];
+      let end = start + 1;
+      while (end < ranked.length && anchor - probs[ranked[end]] <= tolerance) end += 1;
+
+      for (let i = end - 1; i > start; i--) {
+        const j = start + Math.floor(rng() * (i - start + 1));
+        [ranked[i], ranked[j]] = [ranked[j], ranked[i]];
+      }
+      start = end;
+    }
+    return ranked;
+  }
+
+  function candidateActions(game, probs, width, rng = Math.random) {
     const n = game.size;
     const endIndex = n * n;
     if (!game.canPlace()) return [endIndex];
 
-    const actions = [endIndex];
+    const boardActions = [];
     for (let i = 0; i < endIndex; i++) {
-      if (game.board[i] === 0) actions.push(i);
+      if (game.board[i] === 0) boardActions.push(i);
     }
-    actions.sort((a, b) => probs[b] - probs[a]);
-    return actions.slice(0, Math.max(1, width));
+
+    const rankedBoard = rankBoardActions(boardActions, probs, rng);
+    const limit = Math.max(1, width);
+    if (limit === 1) {
+      return probs[endIndex] > 0.5 ? [endIndex] : rankedBoard.slice(0, 1);
+    }
+
+    // END_TURN을 개별 착점 361개와 직접 순위 비교하지 않는다.
+    // 탐색 폭 하나는 END에 남기고 나머지를 조건부 착점 상위 후보로 채운다.
+    return [endIndex, ...rankedBoard.slice(0, limit - 1)];
   }
 
   function sampleActions(probs, actions, temperature, rng = Math.random) {
@@ -140,6 +204,28 @@
       if (roll <= 0) return actions[i];
     }
     return actions[actions.length - 1];
+  }
+
+  /** END/CONTINUE를 먼저 고른 뒤, CONTINUE일 때만 착점 위치를 고른다. */
+  function chooseHierarchicalAction(probs, actions, endIndex, temperature, rng = Math.random) {
+    if (!actions.length) return -1;
+
+    const hasEnd = actions.includes(endIndex);
+    const boardActions = actions.filter((action) => action !== endIndex);
+    if (!boardActions.length) return hasEnd ? endIndex : -1;
+    if (!hasEnd) return sampleActions(probs, boardActions, temperature, rng);
+
+    const pEnd = Math.max(0, Math.min(1, probs[endIndex]));
+    if (!(temperature > 0)) {
+      if (pEnd > 0.5) return endIndex;
+      return sampleActions(probs, boardActions, 0, rng);
+    }
+
+    const safeEnd = Math.max(1e-12, Math.min(1 - 1e-12, pEnd));
+    const endLogit = Math.log(safeEnd / (1 - safeEnd));
+    const temperedEnd = sigmoid(endLogit / temperature);
+    if (rng() < temperedEnd) return endIndex;
+    return sampleActions(probs, boardActions, temperature, rng);
   }
 
   async function expandWholeTurn(nodes, turnColor, evaluateFn, width, recordTurnActions = false) {
@@ -375,6 +461,7 @@
     const temperature = level.temperature || 0;
     const width = level.lookahead || 0;
     const deep = width >= 6;
+    const rng = options.rng || Math.random;
 
     const sim = game.clone();
     const moves = [];
@@ -403,8 +490,8 @@
       if (width > 0) {
         index = await pickWithLookahead(sim, probs, width, evaluateFn, false, false);
       } else {
-        const easyActions = candidateActions(sim, probs, EASY_CANDIDATE_WIDTH);
-        index = sampleActions(probs, easyActions, temperature, options.rng || Math.random);
+        const easyActions = candidateActions(sim, probs, EASY_CANDIDATE_WIDTH, rng);
+        index = chooseHierarchicalAction(probs, easyActions, endIndex, temperature, rng);
       }
 
       if (index === endIndex || index < 0) break;
@@ -445,7 +532,9 @@
       pickWithLookahead,
       candidateActions,
       legalProbs,
+      rankBoardActions,
       sampleActions,
+      chooseHierarchicalAction,
       expandWholeTurn,
       evaluateLeaves,
     };
