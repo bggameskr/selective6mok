@@ -7,6 +7,9 @@
    보통/어려움은 탐색 점수에 온도를 적용하고, 각 색의 첫 착수 턴에는 더 높은 온도를 쓴다.
    어려움은 한 번 고른 현재 턴의 수열을 그대로 실행해 같은 턴 안에서 재탐색하지 않는다.
 
+   policy는 19x19 착수 361개와 턴 마치기 1개, 총 362개 행동을 하나의 분포로 다룬다.
+   턴 마치기도 다른 합법 행동과 동일하게 softmax, 후보 선정, 온도 샘플링에 참여한다.
+
    즉시승 강제 선택, 강제방어 후보 삽입, 삼삼/사사 후보 보정, 전술 leaf 값 덮어쓰기를
    사용하지 않는다. 실제로 탐색한 수가 게임 종료 상태에 도달한 경우의 승패만 확정값으로 쓴다.
    오프닝도 별도로 변형하거나 대칭 이동하지 않는다.
@@ -70,11 +73,6 @@
     };
   }
 
-  function sigmoid(value) {
-    const z = Math.max(-60, Math.min(60, Number.isFinite(value) ? value : 0));
-    return 1 / (1 + Math.exp(-z));
-  }
-
   function legalProbs(logits, game, offset, stride) {
     const n = game.size;
     const endIndex = n * n;
@@ -85,39 +83,34 @@
       return probs;
     }
 
-    const boardLegal = [];
-    let max = -Infinity;
+    const legal = [endIndex];
     for (let i = 0; i < endIndex; i++) {
-      if (game.board[i] !== 0) continue;
-      boardLegal.push(i);
-      const raw = logits[offset + i];
+      if (game.board[i] === 0) legal.push(i);
+    }
+
+    let max = -Infinity;
+    for (const action of legal) {
+      const raw = logits[offset + action];
       const v = Number.isFinite(raw) ? raw : -1e9;
       if (v > max) max = v;
     }
 
-    if (!boardLegal.length) {
-      probs[endIndex] = 1;
-      return probs;
-    }
-
     let total = 0;
-    for (const i of boardLegal) {
-      const raw = logits[offset + i];
+    for (const action of legal) {
+      const raw = logits[offset + action];
       const v = Number.isFinite(raw) ? raw : -1e9;
       const e = Math.exp(v - max);
-      probs[i] = e;
+      probs[action] = e;
       total += e;
     }
 
     if (!(total > 0) || !Number.isFinite(total)) {
-      total = boardLegal.length;
-      for (const i of boardLegal) probs[i] = 1;
+      const uniform = 1 / legal.length;
+      for (const action of legal) probs[action] = uniform;
+      return probs;
     }
 
-    const pEnd = sigmoid(logits[offset + endIndex]);
-    const continueMass = 1 - pEnd;
-    for (const i of boardLegal) probs[i] = continueMass * probs[i] / total;
-    probs[endIndex] = pEnd;
+    for (const action of legal) probs[action] /= total;
     return probs;
   }
 
@@ -142,7 +135,7 @@
     return false;
   }
 
-  function rankBoardActions(actions, probs, rng = Math.random) {
+  function rankActions(actions, probs, rng = Math.random) {
     const ranked = actions.slice().sort((a, b) => probs[b] - probs[a]);
     if (ranked.length < 2) return ranked;
 
@@ -169,18 +162,13 @@
     const endIndex = n * n;
     if (!game.canPlace()) return [endIndex];
 
-    const boardActions = [];
+    const legal = [endIndex];
     for (let i = 0; i < endIndex; i++) {
-      if (game.board[i] === 0) boardActions.push(i);
+      if (game.board[i] === 0) legal.push(i);
     }
 
-    const rankedBoard = rankBoardActions(boardActions, probs, rng);
-    const limit = Math.max(1, width);
-    if (limit === 1) {
-      return probs[endIndex] > 0.5 ? [endIndex] : rankedBoard.slice(0, 1);
-    }
-
-    return [endIndex, ...rankedBoard.slice(0, limit - 1)];
+    const ranked = rankActions(legal, probs, rng);
+    return ranked.slice(0, Math.max(1, width));
   }
 
   function sampleActions(probs, actions, temperature, rng = Math.random) {
@@ -203,27 +191,6 @@
       if (roll <= 0) return actions[i];
     }
     return actions[actions.length - 1];
-  }
-
-  function chooseHierarchicalAction(probs, actions, endIndex, temperature, rng = Math.random) {
-    if (!actions.length) return -1;
-
-    const hasEnd = actions.includes(endIndex);
-    const boardActions = actions.filter((action) => action !== endIndex);
-    if (!boardActions.length) return hasEnd ? endIndex : -1;
-    if (!hasEnd) return sampleActions(probs, boardActions, temperature, rng);
-
-    const pEnd = Math.max(0, Math.min(1, probs[endIndex]));
-    if (!(temperature > 0)) {
-      if (pEnd > 0.5) return endIndex;
-      return sampleActions(probs, boardActions, 0, rng);
-    }
-
-    const safeEnd = Math.max(1e-12, Math.min(1 - 1e-12, pEnd));
-    const endLogit = Math.log(safeEnd / (1 - safeEnd));
-    const temperedEnd = sigmoid(endLogit / temperature);
-    if (rng() < temperedEnd) return endIndex;
-    return sampleActions(probs, boardActions, temperature, rng);
   }
 
   function sampleScoredIndex(indices, scoreFn, temperature, rng = Math.random) {
@@ -440,13 +407,8 @@
     const finalScore = (k) => scores[k] + POLICY_BLEND * probs[actions[k]];
     const terminalWins = indices.filter((k) => rootValue(children[k], rootColor) === 1);
     const rankedIndices = terminalWins.length ? terminalWins : indices;
-
-    let best = sampleScoredIndex(rankedIndices, finalScore, 0, rng);
+    const best = sampleScoredIndex(rankedIndices, finalScore, temperature, rng);
     const endIndex = n * n;
-    if (temperature > 0 && best >= 0 && actions[best] !== endIndex) {
-      const boardIndices = rankedIndices.filter((k) => actions[k] !== endIndex);
-      if (boardIndices.length) best = sampleScoredIndex(boardIndices, finalScore, temperature, rng);
-    }
 
     if (returnPlan) {
       if (deepPlans && deepPlans.has(best)) {
@@ -513,7 +475,7 @@
         );
       } else {
         const easyActions = candidateActions(sim, probs, EASY_CANDIDATE_WIDTH, rng);
-        index = chooseHierarchicalAction(probs, easyActions, endIndex, temperature, rng);
+        index = sampleActions(probs, easyActions, temperature, rng);
       }
 
       if (index === endIndex || index < 0) break;
@@ -532,11 +494,12 @@
 
   function policyRank(probs, game, selected) {
     const endIndex = game.size * game.size;
-    const legal = [];
-    for (let i = 0; i < endIndex; i++) {
-      if (game.board[i] === EMPTY) legal.push(i);
+    const legal = [endIndex];
+    if (game.canPlace()) {
+      for (let i = 0; i < endIndex; i++) {
+        if (game.board[i] === EMPTY) legal.push(i);
+      }
     }
-    if (!game.canPlace() || game.canPlace()) legal.push(endIndex);
     legal.sort((a, b) => probs[b] - probs[a]);
     const rank = legal.indexOf(selected);
     return rank < 0 ? null : rank + 1;
@@ -620,8 +583,8 @@
         best_policy_prob: Number(probs[best]),
         end_turn_logit: Number(policy[offset + endIndex]),
         end_turn_prob: Number(probs[endIndex]),
-        policy_logits: Array.from(policy.slice(offset, offset + endIndex), Number),
-        policy_probs: Array.from(probs.slice(0, endIndex), Number),
+        policy_logits: Array.from(policy.slice(offset, offset + stride), Number),
+        policy_probs: Array.from(probs.slice(0, stride), Number),
       };
     });
 
@@ -631,7 +594,7 @@
       format: 'selective6mok-web-kifu-v1',
       created_at: new Date().toISOString(),
       model: MODEL_URL,
-      note: 'policy 값은 신경망 원출력과 합법수 기준 확률입니다. 탐색/lookahead 최종 점수는 포함하지 않습니다.',
+      note: 'policy 값은 361개 착수와 턴 마치기를 합친 362개 신경망 원출력과 합법수 기준 softmax 확률입니다. 탐색/lookahead 최종 점수는 포함하지 않습니다.',
       board_size: game.size,
       config: { ...game.config },
       difficulty: level ? {
@@ -726,9 +689,9 @@
       pickWithLookahead,
       candidateActions,
       legalProbs,
-      rankBoardActions,
+      rankActions,
+      rankBoardActions: rankActions,
       sampleActions,
-      chooseHierarchicalAction,
       sampleScoredIndex,
       expandWholeTurn,
       evaluateLeaves,
