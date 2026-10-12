@@ -22,7 +22,7 @@
 
   const MODEL_URL = 'sixmok.onnx';
   const MODEL_BOARD_SIZE = 19;
-  const POLICY_BLEND = 0.1;
+  const POLICY_BLEND = 0.5;
   const POLICY_TIE_REL_EPS = 1e-5;
   const EASY_CANDIDATE_WIDTH = 8;
   const DEEP_ROOTS = 3;
