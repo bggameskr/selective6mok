@@ -1,14 +1,16 @@
 /* 학습한 모델을 브라우저 게임에 붙인다.
 
    난이도에 따라 모델 정책과 가치만으로 제한 탐색한다.
-     쉬움   0갈래 — 정책 상위 후보 안에서 온도로 샘플링
-     보통   3갈래 — 정책 상위 후보의 1-ply 가치 탐색
-     어려움 6갈래 — 상위 후보에서 현재 턴 전체와 상대 턴 전체를 제한 탐색
-   보통/어려움은 탐색 점수에 온도를 적용하고, 각 색의 첫 착수 턴에는 더 높은 온도를 쓴다.
+     쉬움   8갈래 — 정책 상위 후보의 1-ply value×policy 가중치에서 온도로 샘플링
+     보통   3갈래 — 정책 상위 후보의 1-ply value×policy 가중치에서 온도로 샘플링
+     어려움 6갈래 — 상위 후보에서 현재 턴 전체와 상대 턴 전체를 제한 탐색한 뒤 value×policy로 선택
+   모든 난이도는 최종 value×policy 가중치에 온도를 적용하고, 각 색의 첫 착수 턴에는 더 높은 온도를 쓴다.
    어려움은 한 번 고른 현재 턴의 수열을 그대로 실행해 같은 턴 안에서 재탐색하지 않는다.
 
    policy는 19x19 착수 361개와 턴 마치기 1개, 총 362개 행동을 하나의 분포로 다룬다.
    턴 마치기도 다른 합법 행동과 동일하게 softmax, 후보 선정, 온도 샘플링에 참여한다.
+   value는 각 후보를 실제 적용한 후의 후속 국면을 평가하며, 현재 플레이어 관점으로 되돌린 뒤
+   [-1, 1]을 [0, 1] 승산으로 변환해 policy 확률과 곱한다.
 
    즉시승 강제 선택, 강제방어 후보 삽입, 삼삼/사사 후보 보정, 전술 leaf 값 덮어쓰기를
    사용하지 않는다. 실제로 탐색한 수가 게임 종료 상태에 도달한 경우의 승패만 확정값으로 쓴다.
@@ -22,7 +24,6 @@
 
   const MODEL_URL = 'sixmok.onnx';
   const MODEL_BOARD_SIZE = 19;
-  const POLICY_BLEND = 0.5;
   const POLICY_TIE_REL_EPS = 1e-5;
   const EASY_CANDIDATE_WIDTH = 8;
   const DEEP_ROOTS = 3;
@@ -31,6 +32,7 @@
   const NORMAL_OPENING_TEMPERATURE = 1.0;
   const HARD_TEMPERATURE = 0.2;
   const HARD_OPENING_TEMPERATURE = 0.8;
+  const VALUE_WEIGHT_FLOOR = 1e-6;
 
   let sessionPromise = null;
 
@@ -215,6 +217,47 @@
     return indices[indices.length - 1];
   }
 
+  function valueWinProb(value) {
+    const raw = Number.isFinite(value) ? value : -1;
+    const clipped = Math.max(-1, Math.min(1, raw));
+    return Math.max(VALUE_WEIGHT_FLOOR, Math.min(1, (clipped + 1) * 0.5));
+  }
+
+  function policyValueWeight(policyProb, rootValueScore) {
+    return Math.max(Number(policyProb) || 0, 0) * valueWinProb(rootValueScore);
+  }
+
+  function sampleWeightedIndex(indices, weightFn, temperature, rng = Math.random) {
+    if (!indices.length) return -1;
+
+    if (!(temperature > 0)) {
+      let best = indices[0];
+      for (const k of indices.slice(1)) {
+        if (weightFn(k) > weightFn(best)) best = k;
+      }
+      return best;
+    }
+
+    const weights = indices.map((k) => (
+      Math.pow(Math.max(weightFn(k), Number.MIN_VALUE), 1 / temperature)
+    ));
+    const total = weights.reduce((sum, value) => sum + value, 0);
+    if (!(total > 0) || !Number.isFinite(total)) {
+      let best = indices[0];
+      for (const k of indices.slice(1)) {
+        if (weightFn(k) > weightFn(best)) best = k;
+      }
+      return best;
+    }
+
+    let roll = rng() * total;
+    for (let i = 0; i < indices.length; i++) {
+      roll -= weights[i];
+      if (roll <= 0) return indices[i];
+    }
+    return indices[indices.length - 1];
+  }
+
   async function expandWholeTurn(nodes, turnColor, evaluateFn, width, recordTurnActions = false) {
     let frontier = nodes.slice();
     const done = [];
@@ -336,9 +379,13 @@
     let deepPlans = null;
     if (deep) {
       const expandable = actions
-        .map((action, k) => ({ action, k, score: scores[k] + POLICY_BLEND * probs[action] }))
+        .map((action, k) => ({
+          action,
+          k,
+          weight: policyValueWeight(probs[action], scores[k]),
+        }))
         .filter(({ k }) => !children[k].isOver)
-        .sort((a, b) => b.score - a.score)
+        .sort((a, b) => b.weight - a.weight)
         .slice(0, DEEP_ROOTS);
 
       const endIndex = n * n;
@@ -404,10 +451,10 @@
     }
 
     const indices = deepPlans && deepPlans.size ? [...deepPlans.keys()] : actions.map((_, k) => k);
-    const finalScore = (k) => scores[k] + POLICY_BLEND * probs[actions[k]];
+    const finalWeight = (k) => policyValueWeight(probs[actions[k]], scores[k]);
     const terminalWins = indices.filter((k) => rootValue(children[k], rootColor) === 1);
     const rankedIndices = terminalWins.length ? terminalWins : indices;
-    const best = sampleScoredIndex(rankedIndices, finalScore, temperature, rng);
+    const best = sampleWeightedIndex(rankedIndices, finalWeight, temperature, rng);
     const endIndex = n * n;
 
     if (returnPlan) {
@@ -468,15 +515,10 @@
       const { policy, stride } = await evaluateFn([sim]);
       const probs = legalProbs(policy, sim, 0, stride);
 
-      let index;
-      if (width > 0) {
-        index = await pickWithLookahead(
-          sim, probs, width, evaluateFn, false, false, temperature, rng
-        );
-      } else {
-        const easyActions = candidateActions(sim, probs, EASY_CANDIDATE_WIDTH, rng);
-        index = sampleActions(probs, easyActions, temperature, rng);
-      }
+      const candidateWidth = width > 0 ? width : EASY_CANDIDATE_WIDTH;
+      const index = await pickWithLookahead(
+        sim, probs, candidateWidth, evaluateFn, false, false, temperature, rng
+      );
 
       if (index === endIndex || index < 0) break;
       const r = Math.floor(index / n);
@@ -594,7 +636,7 @@
       format: 'selective6mok-web-kifu-v1',
       created_at: new Date().toISOString(),
       model: MODEL_URL,
-      note: 'policy 값은 361개 착수와 턴 마치기를 합친 362개 신경망 원출력과 합법수 기준 softmax 확률입니다. 탐색/lookahead 최종 점수는 포함하지 않습니다.',
+      note: 'policy 값은 361개 착수와 턴 마치기를 합친 362개 신경망 원출력과 합법수 기준 softmax 확률입니다. 실제 착수는 후보별 후속 value를 현재 플레이어 승산으로 바꾼 뒤 policy 확률과 곱한 최종 가중치에 temperature를 적용합니다.',
       board_size: game.size,
       config: { ...game.config },
       difficulty: level ? {
@@ -693,6 +735,9 @@
       rankBoardActions: rankActions,
       sampleActions,
       sampleScoredIndex,
+      sampleWeightedIndex,
+      valueWinProb,
+      policyValueWeight,
       expandWholeTurn,
       evaluateLeaves,
       hasColorStone,
