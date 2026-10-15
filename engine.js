@@ -158,7 +158,7 @@ class SixMok {
    encoding.py 의 encode 와 규격이 한 글자도 달라선 안 된다.
    한쪽을 고치면 반드시 다른 쪽도 고치고 parity_check 로 확인한다. */
 
-const N_PLANES = 16;
+const N_PLANES = 14;
 const STONE_SCALE = 6;
 const STONE_CAP = 12;
 
@@ -169,14 +169,13 @@ const STONE_CAP = 12;
     덕분에 막힌 줄을 걸러내고, 끊어진 형태를 잡아낸다.
 
     best[i]   i 를 품은 살아 있는 창 중 color 돌이 가장 많은 개수
-    forks4[i] 그런 창의 돌이 need-2 개 이상인 방향의 수 (2 이상이면 사사)
-    forks3[i] need-3 개 이상인 방향의 수 (2 이상이면 삼삼) */
+    forks3[i] need-3 개 이상인 살아 있는 창이 걸린 방향의 수
+              (2 이상이면 3단계 fork) */
 function threatGrids(game, color) {
   const n = game.size;
   const plane = n * n;
   const need = game.config.winLength;
   const best = new Int16Array(plane).fill(-1);
-  const forks4 = new Int16Array(plane);
   const forks3 = new Int16Array(plane);
   const dirBest = new Int16Array(plane);
 
@@ -203,11 +202,10 @@ function threatGrids(game, color) {
     }
     for (let i = 0; i < plane; i++) {
       if (dirBest[i] > best[i]) best[i] = dirBest[i];
-      if (dirBest[i] >= need - 2) forks4[i] += 1;
       if (dirBest[i] >= need - 3) forks3[i] += 1;
     }
   }
-  return { best, forks4, forks3 };
+  return { best, forks3 };
 }
 
 /** 지금 두면 곧바로 6목이 되는 자리인가. */
@@ -216,8 +214,14 @@ function isImmediateWin(game, index, color) {
   return best[index] >= game.config.winLength - 1;
 }
 
-/** 현재 차례인 쪽 관점으로 (16, n, n) 입력을 만든다. 길이 16*n*n 의 Float32Array.
-    encoding.py 의 encode 와 값이 한 자리도 달라선 안 된다. */
+/** 현재 차례인 쪽 관점으로 (14, n, n) 입력을 만든다. 길이 14*n*n 의 Float32Array.
+    encoding.py 의 encode 와 값이 한 자리도 달라선 안 된다.
+
+    0~5   판/보유 돌/차례 상태
+    6~8   내 1/2/3돌 이내 완성 위협
+    9     내 3단계 fork
+    10~12 상대 1/2/3돌 이내 완성 위협
+    13    상대 3단계 fork */
 function encodeState(game) {
   const n = game.size;
   const plane = n * n;
@@ -237,15 +241,14 @@ function encodeState(game) {
   data.fill(Math.min(game.stones[foe], STONE_CAP) / STONE_SCALE, 4 * plane, 5 * plane);
   data.fill(me === BLACK ? 1 : 0, 5 * plane, 6 * plane);
 
-  for (const [offset, color] of [[6, me], [11, foe]]) {
-    const { best, forks4, forks3 } = threatGrids(game, color);
+  for (const [offset, color] of [[6, me], [10, foe]]) {
+    const { best, forks3 } = threatGrids(game, color);
     for (let i = 0; i < plane; i++) {
       if (game.board[i] !== EMPTY) continue;      // 빈 자리만 본다
       if (best[i] >= need - 1) data[(offset + 0) * plane + i] = 1;
       if (best[i] >= need - 2) data[(offset + 1) * plane + i] = 1;
       if (best[i] >= need - 3) data[(offset + 2) * plane + i] = 1;
-      if (forks4[i] >= 2) data[(offset + 3) * plane + i] = 1;
-      if (forks3[i] >= 2) data[(offset + 4) * plane + i] = 1;
+      if (forks3[i] >= 2) data[(offset + 3) * plane + i] = 1;
     }
   }
   return data;
