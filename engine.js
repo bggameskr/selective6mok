@@ -160,7 +160,16 @@ class SixMok {
 
 const N_PLANES = 14;
 const STONE_SCALE = 6;
-const STONE_CAP = 12;
+const STONE_LINEAR_LIMIT = 12;
+const STONE_TAIL_SCALE = 48;
+
+/** 보유 돌 수를 5.9 학습 인코더와 같은 연속 특징값으로 바꾼다.
+    0~12개는 기존 s/6을 그대로 유지하고, 12개 초과는 완만한 선형 꼬리를 쓴다. */
+function encodeStoneCount(stones) {
+  const value = Number(stones);
+  if (value <= STONE_LINEAR_LIMIT) return value / STONE_SCALE;
+  return 2 + (value - STONE_LINEAR_LIMIT) / STONE_TAIL_SCALE;
+}
 
 /** 각 자리가 color 에게 얼마나 위험한/유망한 자리인지.
 
@@ -236,9 +245,9 @@ function encodeState(game) {
     else if (v === foe) data[plane + i] = 1;
   }
 
-  data.fill(Math.min(game.stones[me], STONE_CAP) / STONE_SCALE, 2 * plane, 3 * plane);
+  data.fill(encodeStoneCount(game.stones[me]), 2 * plane, 3 * plane);
   data.fill(game.placedThisTurn / game.config.maxPlacesPerTurn, 3 * plane, 4 * plane);
-  data.fill(Math.min(game.stones[foe], STONE_CAP) / STONE_SCALE, 4 * plane, 5 * plane);
+  data.fill(encodeStoneCount(game.stones[foe]), 4 * plane, 5 * plane);
   data.fill(me === BLACK ? 1 : 0, 5 * plane, 6 * plane);
 
   for (const [offset, color] of [[6, me], [10, foe]]) {
@@ -370,5 +379,5 @@ function planTurn(game, options = {}) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { SixMok, planTurn, bestPoint, windowScores, encodeState, threatGrids, isImmediateWin, AI_LEVELS, N_PLANES, EMPTY, BLACK, WHITE, END_TURN, other };
+  module.exports = { SixMok, planTurn, bestPoint, windowScores, encodeState, encodeStoneCount, threatGrids, isImmediateWin, AI_LEVELS, N_PLANES, EMPTY, BLACK, WHITE, END_TURN, other };
 }
