@@ -158,12 +158,12 @@ class SixMok {
    encoding.py 의 encode 와 규격이 한 글자도 달라선 안 된다.
    한쪽을 고치면 반드시 다른 쪽도 고치고 parity_check 로 확인한다. */
 
-const N_PLANES = 14;
+const N_PLANES = 13;
 const STONE_SCALE = 6;
 const STONE_LINEAR_LIMIT = 12;
 const STONE_TAIL_SCALE = 48;
 
-/** 보유 돌 수를 5.9 학습 인코더와 같은 연속 특징값으로 바꾼다.
+/** 보유 돌 수를 5.10 학습 인코더와 같은 연속 특징값으로 바꾼다.
     0~12개는 기존 s/6을 그대로 유지하고, 12개 초과는 완만한 선형 꼬리를 쓴다. */
 function encodeStoneCount(stones) {
   const value = Number(stones);
@@ -223,14 +223,16 @@ function isImmediateWin(game, index, color) {
   return best[index] >= game.config.winLength - 1;
 }
 
-/** 현재 차례인 쪽 관점으로 (14, n, n) 입력을 만든다. 길이 14*n*n 의 Float32Array.
+/** 현재 차례인 쪽 관점으로 (13, n, n) 입력을 만든다. 길이 13*n*n 의 Float32Array.
     encoding.py 의 encode 와 값이 한 자리도 달라선 안 된다.
 
-    0~5   판/보유 돌/차례 상태
-    6~8   내 1/2/3돌 이내 완성 위협
-    9     내 3단계 fork
-    10~12 상대 1/2/3돌 이내 완성 위협
-    13    상대 3단계 fork */
+    0~4   내/상대 판 상태 + 양측 보유 돌 + 현재 턴 착수 수
+    5~7   내 1/2/3돌 이내 완성 위협
+    8     내 3단계 fork
+    9~11  상대 1/2/3돌 이내 완성 위협
+    12    상대 3단계 fork
+
+    절대 색 평면은 사용하지 않는다. 동일한 상대적 국면은 흑/백과 무관하게 같은 입력이 된다. */
 function encodeState(game) {
   const n = game.size;
   const plane = n * n;
@@ -248,9 +250,8 @@ function encodeState(game) {
   data.fill(encodeStoneCount(game.stones[me]), 2 * plane, 3 * plane);
   data.fill(game.placedThisTurn / game.config.maxPlacesPerTurn, 3 * plane, 4 * plane);
   data.fill(encodeStoneCount(game.stones[foe]), 4 * plane, 5 * plane);
-  data.fill(me === BLACK ? 1 : 0, 5 * plane, 6 * plane);
 
-  for (const [offset, color] of [[6, me], [10, foe]]) {
+  for (const [offset, color] of [[5, me], [9, foe]]) {
     const { best, forks3 } = threatGrids(game, color);
     for (let i = 0; i < plane; i++) {
       if (game.board[i] !== EMPTY) continue;      // 빈 자리만 본다
