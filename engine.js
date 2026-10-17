@@ -155,22 +155,27 @@ class SixMok {
 
 /* ------------------------------------------------------------------ 신경망 입력
 
-   encoding.py 의 encode 와 규격이 한 글자도 달라선 안 된다.
-   한쪽을 고치면 반드시 다른 쪽도 고치고 parity_check 로 확인한다. */
+   v5.10+ encoding.py 와 동일한 13평면 current-player-relative 규격이다.
+   절대 색상 평면은 사용하지 않는다. */
 
-const N_PLANES = 16;
+const N_PLANES = 13;
 const STONE_SCALE = 6;
-const STONE_CAP = 12;
+const STONE_LINEAR_LIMIT = 12;
+const STONE_TAIL_SCALE = 48;
+
+function encodeStoneCount(stones) {
+  if (stones <= STONE_LINEAR_LIMIT) return stones / STONE_SCALE;
+  return 2 + (stones - STONE_LINEAR_LIMIT) / STONE_TAIL_SCALE;
+}
 
 /** 각 자리가 color 에게 얼마나 위험한/유망한 자리인지.
 
     연속 개수가 아니라 '연속된 여섯 칸(창)' 을 본다.
     창 안에 상대 돌이 하나라도 있으면 그 창은 죽은 창이라 세지 않는다.
-    덕분에 막힌 줄을 걸러내고, 끊어진 형태를 잡아낸다.
 
     best[i]   i 를 품은 살아 있는 창 중 color 돌이 가장 많은 개수
-    forks4[i] 그런 창의 돌이 need-2 개 이상인 방향의 수 (2 이상이면 사사)
-    forks3[i] need-3 개 이상인 방향의 수 (2 이상이면 삼삼) */
+    forks4[i] 그런 창의 돌이 need-2 개 이상인 방향의 수
+    forks3[i] need-3 개 이상인 방향의 수 */
 function threatGrids(game, color) {
   const n = game.size;
   const plane = n * n;
@@ -216,8 +221,7 @@ function isImmediateWin(game, index, color) {
   return best[index] >= game.config.winLength - 1;
 }
 
-/** 현재 차례인 쪽 관점으로 (16, n, n) 입력을 만든다. 길이 16*n*n 의 Float32Array.
-    encoding.py 의 encode 와 값이 한 자리도 달라선 안 된다. */
+/** 현재 차례인 쪽 관점으로 (13, n, n) 입력을 만든다. */
 function encodeState(game) {
   const n = game.size;
   const plane = n * n;
@@ -232,20 +236,18 @@ function encodeState(game) {
     else if (v === foe) data[plane + i] = 1;
   }
 
-  data.fill(Math.min(game.stones[me], STONE_CAP) / STONE_SCALE, 2 * plane, 3 * plane);
+  data.fill(encodeStoneCount(game.stones[me]), 2 * plane, 3 * plane);
   data.fill(game.placedThisTurn / game.config.maxPlacesPerTurn, 3 * plane, 4 * plane);
-  data.fill(Math.min(game.stones[foe], STONE_CAP) / STONE_SCALE, 4 * plane, 5 * plane);
-  data.fill(me === BLACK ? 1 : 0, 5 * plane, 6 * plane);
+  data.fill(encodeStoneCount(game.stones[foe]), 4 * plane, 5 * plane);
 
-  for (const [offset, color] of [[6, me], [11, foe]]) {
-    const { best, forks4, forks3 } = threatGrids(game, color);
+  for (const [offset, color] of [[5, me], [9, foe]]) {
+    const { best, forks3 } = threatGrids(game, color);
     for (let i = 0; i < plane; i++) {
-      if (game.board[i] !== EMPTY) continue;      // 빈 자리만 본다
+      if (game.board[i] !== EMPTY) continue;
       if (best[i] >= need - 1) data[(offset + 0) * plane + i] = 1;
       if (best[i] >= need - 2) data[(offset + 1) * plane + i] = 1;
       if (best[i] >= need - 3) data[(offset + 2) * plane + i] = 1;
-      if (forks4[i] >= 2) data[(offset + 3) * plane + i] = 1;
-      if (forks3[i] >= 2) data[(offset + 4) * plane + i] = 1;
+      if (forks3[i] >= 2) data[(offset + 3) * plane + i] = 1;
     }
   }
   return data;
@@ -259,8 +261,7 @@ function encodeState(game) {
 const RUN_SCORE = { 0: 1, 1: 3, 2: 20, 3: 120, 4: 3000, 5: 200000 };
 const WIN_SCORE = 10000000;
 
-/** 각 자리의 가치. 그 자리를 품은 살아 있는 창을 모두 합산한다.
-    최대값 하나만 쓰면 대부분의 자리가 동점이 되어 사실상 아무 데나 두게 된다. */
+/** 각 자리의 가치. 그 자리를 품은 살아 있는 창을 모두 합산한다. */
 function windowScores(game, color) {
   const n = game.size;
   const plane = n * n;
@@ -310,11 +311,11 @@ function candidates(game, radius = 2) {
 }
 
 /* 난이도. 세 값이 함께 움직인다.
-   mistake  : 최선 대신 아무 후보나 두는 확률 (막아야 할 자리를 놓치기도 한다)
+   mistake  : 최선 대신 아무 후보나 두는 확률
    defense  : 상대를 막는 수에 얼마나 무게를 둘지
    hoard    : 돌을 아꼈다가 세 개를 몰아 둘지
-   temperature : 학습 모델을 붙였을 때 쓰는 값. 0이면 언제나 최선, 클수록 흔들린다.
-   lookahead   : 학습 모델이 한 수 앞을 몇 갈래나 내다볼지. 0이면 탐색 없음. */
+   temperature : 학습 모델의 최종 후보 가중치에 적용. 0이면 최선, 클수록 흔들린다.
+   lookahead   : 학습 모델 탐색 폭. */
 const AI_LEVELS = {
   easy:   { label: '쉬움',   mistake: 0.35, defense: 0.40, hoard: false, temperature: 1.4, lookahead: 0 },
   normal: { label: '보통',   mistake: 0.12, defense: 0.75, hoard: true,  temperature: 0.6, lookahead: 3 },
@@ -336,8 +337,7 @@ function bestPoint(game, color, defenseWeight = 1.0) {
   return { point: best[Math.floor(Math.random() * best.length)], score: bestScore };
 }
 
-/** 한 턴 분량의 행동 목록을 만든다. 게임 상태는 바꾸지 않는다.
-    기본값은 play.py 의 HeuristicAI 와 같다 (학습 데이터를 만든 상대와 동일). */
+/** 한 턴 분량의 행동 목록을 만든다. 게임 상태는 바꾸지 않는다. */
 function planTurn(game, options = {}) {
   const { hoard = true, mistake = 0, defense = 1.0 } = options;
   const sim = game.clone();
@@ -346,7 +346,6 @@ function planTurn(game, options = {}) {
     let { point, score } = bestPoint(sim, sim.current, defense);
     if (!point) break;
 
-    // 이기는 수는 절대 놓치지 않는다. 그 밖에는 확률적으로 엉뚱한 자리에 둔다.
     if (mistake > 0 && score < WIN_SCORE && Math.random() < mistake) {
       const pool = candidates(sim);
       if (pool.length) {
@@ -357,7 +356,7 @@ function planTurn(game, options = {}) {
 
     const urgent = score >= RUN_SCORE[4];
     if (hoard && !urgent && sim.stones[sim.current] < sim.config.maxPlacesPerTurn && sim.placedThisTurn === 0) {
-      break; // 돌을 모아 다음 턴에 세 개를 몰아 둔다
+      break;
     }
     sim.place(point[0], point[1]);
     moves.push(point);
@@ -367,5 +366,9 @@ function planTurn(game, options = {}) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { SixMok, planTurn, bestPoint, windowScores, encodeState, threatGrids, isImmediateWin, AI_LEVELS, N_PLANES, EMPTY, BLACK, WHITE, END_TURN, other };
+  module.exports = {
+    SixMok, planTurn, bestPoint, windowScores, encodeState, encodeStoneCount,
+    threatGrids, isImmediateWin, AI_LEVELS, N_PLANES,
+    EMPTY, BLACK, WHITE, END_TURN, other,
+  };
 }
