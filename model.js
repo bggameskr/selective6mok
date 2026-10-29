@@ -5,7 +5,10 @@
      보통   — 전술 필수 후보를 보존한 3갈래 1-ply policy×value 평가
      어려움 — 상위 후보에서 현재 턴 전체와 상대 턴 전체를 제한 탐색
 
-   13평면(v5.10+)과 구형 16평면 ONNX를 모두 지원한다. */
+   13평면(v5.10+)과 구형 16평면 ONNX를 모두 지원한다.
+   v6.1.3 배포 정합성:
+     - 3번째 착수/보유돌 소진 child는 강제 END_TURN 뒤 상태로 value를 평가한다.
+     - 0착수 자발 END_TURN만 보유돌 LUT로 감쇠한다. */
 
 (() => {
   'use strict';
@@ -20,6 +23,12 @@
   const STONE_SCALE = 6;
   const STONE_LINEAR_LIMIT = 12;
   const STONE_TAIL_SCALE = 48;
+  const END_STOCK_LUT_MAX = 32;
+  const POLICY_NEAR_TIE_REL_TOL = 1e-4;
+  const EMPTY_END_STOCK_LUT = Array.from(
+    { length: END_STOCK_LUT_MAX + 1 },
+    (_, stones) => (stones <= 2 ? 1.0 : Math.pow(0.5, stones - 2)),
+  );
 
   let sessionPromise = null;
   let cachedInputPlanes = null;
@@ -171,16 +180,32 @@
     return Math.max(Number.isFinite(policyProb) ? policyProb : 0, 0) * valueWinProb(rootValueScore);
   }
 
+  function emptyEndStockMultiplier(game) {
+    if (game.placedThisTurn > 0 || !game.canPlace()) return 1.0;
+    const stones = Math.max(0, Math.floor(Number(game.stones[game.current]) || 0));
+    return EMPTY_END_STOCK_LUT[Math.min(stones, END_STOCK_LUT_MAX)];
+  }
+
+  function actionModifier(game, action) {
+    const endIndex = game.size * game.size;
+    return action === endIndex ? emptyEndStockMultiplier(game) : 1.0;
+  }
+
   function sampleWeightedIndices(indices, weightFn, temperature, rng = Math.random) {
     if (!indices.length) return -1;
     if (!(temperature > 0)) {
-      let best = indices[0];
-      let bestWeight = weightFn(best);
-      for (const i of indices.slice(1)) {
+      const weights = indices.map((i) => {
         const w = weightFn(i);
-        if (w > bestWeight) { best = i; bestWeight = w; }
+        return Number.isFinite(w) ? w : 0;
+      });
+      const scale = Math.max(1e-12, ...weights.map((w) => Math.abs(w)));
+      let bestPos = 0;
+      let bestRank = weights[0] + rng() * scale * POLICY_NEAR_TIE_REL_TOL;
+      for (let j = 1; j < indices.length; j++) {
+        const rank = weights[j] + rng() * scale * POLICY_NEAR_TIE_REL_TOL;
+        if (rank > bestRank) { bestPos = j; bestRank = rank; }
       }
-      return best;
+      return indices[bestPos];
     }
     const scaled = indices.map((i) => Math.pow(Math.max(weightFn(i), 1e-12), 1 / temperature));
     const total = scaled.reduce((sum, w) => sum + w, 0);
@@ -215,6 +240,14 @@
     if (!game.isOver) return null;
     if (game.winner === null) return 0;
     return game.winner === rootColor ? 1 : -1;
+  }
+
+  function playEvaluationAction(game, action) {
+    const child = game.clone();
+    const endIndex = game.size * game.size;
+    child.play(toMove(action, game.size));
+    if (action !== endIndex && !child.isOver && !child.canPlace()) child.play(END_TURN);
+    return child;
   }
 
   function availablePlacements(game, color) {
@@ -330,9 +363,14 @@
     });
   }
 
-  function sampleActions(probs, actions, temperature, rng = Math.random) {
+  function sampleActions(game, probs, actions, temperature, rng = Math.random) {
     if (!actions.length) return -1;
-    return sampleWeightedIndices(actions, (action) => Math.max(probs[action], 0), temperature, rng);
+    return sampleWeightedIndices(
+      actions,
+      (action) => Math.max(probs[action], 0) * actionModifier(game, action),
+      temperature,
+      rng,
+    );
   }
 
   function gameTurnDepthLimit(nodes) {
@@ -368,9 +406,8 @@
         const actions = candidateActions(g, probs, width);
         const endIndex = g.size * g.size;
         for (const action of actions) {
-          const child = g.clone();
-          child.play(toMove(action, g.size));
-          const prior = node.prior * Math.max(probs[action], 1e-12);
+          const child = playEvaluationAction(g, action);
+          const prior = node.prior * Math.max(probs[action] * actionModifier(g, action), 1e-12);
           const nextNode = { ...node, game: child, prior };
           if (recordTurnActions) {
             nextNode.turnActions = (node.turnActions || []).slice();
@@ -424,11 +461,7 @@
     const n = game.size;
     const rootColor = game.current;
     const actions = candidateActions(game, probs, width);
-    const children = actions.map((action) => {
-      const child = game.clone();
-      child.play(toMove(action, n));
-      return child;
-    });
+    const children = actions.map((action) => playEvaluationAction(game, action));
 
     const scores = new Array(actions.length);
     const pending = [];
@@ -447,7 +480,9 @@
       });
     }
 
-    const actionWeight = (k) => policyValueWeight(probs[actions[k]], scores[k]);
+    const actionWeight = (k) => (
+      policyValueWeight(probs[actions[k]], scores[k]) * actionModifier(game, actions[k])
+    );
     let deepPlans = null;
 
     if (deep) {
@@ -459,7 +494,8 @@
 
       const endIndex = n * n;
       const rootStarts = expandable.map(({ action, k }) => ({
-        game: children[k], rootIndex: k, prior: Math.max(probs[action], 1e-12),
+        game: children[k], rootIndex: k,
+        prior: Math.max(probs[action] * actionModifier(game, action), 1e-12),
         turnActions: action === endIndex ? [] : [action],
       }));
 
@@ -524,7 +560,7 @@
     const rankedIndices = winningIndices.length ? winningIndices : indices;
     const chosen = sampleWeightedIndices(
       rankedIndices,
-      (k) => policyValueWeight(probs[actions[k]], scores[k]),
+      actionWeight,
       deep ? 0 : temperature,
       rng,
     );
@@ -581,7 +617,7 @@
         index = await pickWithLookahead(sim, probs, width, evaluateFn, false, false, temperature, rng);
       } else {
         const easyActions = candidateActions(sim, probs, EASY_CANDIDATE_WIDTH);
-        index = sampleActions(probs, easyActions, temperature, rng);
+        index = sampleActions(sim, probs, easyActions, temperature, rng);
       }
 
       if (index === endIndex || index < 0) break;
@@ -619,6 +655,7 @@
       oneTurnWinningWindows, oneTurnWinningSquares, oneTurnDefenseSquares,
       availablePlacements, legalProbs, sampleActions, findImmediateWin,
       expandWholeTurn, tacticalLeafValue, valueWinProb, policyValueWeight,
+      emptyEndStockMultiplier, actionModifier, playEvaluationAction,
       encodeStateForModel,
     };
   }
