@@ -13,7 +13,7 @@
 (() => {
   'use strict';
 
-  const MODEL_URL = 'sixmok.onnx';
+  const MODEL_URL = 'sixmok.onnx?v=6.1.3-1';
   const MODEL_BOARD_SIZE = 19;
   const VALUE_WEIGHT_FLOOR = 1e-6;
   const EASY_CANDIDATE_WIDTH = 8;
