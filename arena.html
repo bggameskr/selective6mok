@@ -106,9 +106,9 @@
       <input id="model-a-file" type="file" accept=".onnx,application/octet-stream">
       <label for="level-a">웹 난이도</label>
       <select id="level-a">
-        <option value="easy">쉬움 · T 0.7</option>
-        <option value="normal" selected>보통 · T 0.5</option>
-        <option value="hard">어려움 · T 0.3</option>
+        <option value="easy">쉬움 · T 1.2 · 후보 8 · 컷 2%</option>
+        <option value="normal" selected>보통 · T 0.6 · 후보 5 · 컷 5%</option>
+        <option value="hard">어려움 · T 0.3 · 후보 3 · 컷 10%</option>
       </select>
       <div id="model-a-status" class="status">파일 미선택</div>
     </div>
@@ -119,9 +119,9 @@
       <input id="model-b-file" type="file" accept=".onnx,application/octet-stream">
       <label for="level-b">웹 난이도</label>
       <select id="level-b">
-        <option value="easy">쉬움 · T 0.7</option>
-        <option value="normal" selected>보통 · T 0.5</option>
-        <option value="hard">어려움 · T 0.3</option>
+        <option value="easy">쉬움 · T 1.2 · 후보 8 · 컷 2%</option>
+        <option value="normal" selected>보통 · T 0.6 · 후보 5 · 컷 5%</option>
+        <option value="hard">어려움 · T 0.3 · 후보 3 · 컷 10%</option>
       </select>
       <div id="model-b-status" class="status">파일 미선택</div>
     </div>
@@ -141,8 +141,8 @@
       <button id="stop" disabled>중단</button>
     </div>
     <p class="note">
-      각 모델은 현재 웹과 같은 3후보 1-ply P×V 정책을 사용합니다. 빈 판 첫 착수는 T=1.5, 전체 착수 10개 미만은 선택 난이도 T×1.5,
-      이후는 난이도 기본값을 사용하며 빈 판을 제외하면 최고 가중치의 5% 미만 후보를 버립니다. 색은 매 판 교대하고 같은 색교환 쌍에는 같은 seed를 씁니다.
+      각 모델은 현재 웹과 같은 1-ply P×V 정책을 사용합니다. 난이도별로 쉬움은 후보 8/T=1.2/컷 2%, 보통은 후보 5/T=0.6/컷 5%,
+      어려움은 후보 3/T=0.3/컷 10%를 사용합니다. 빈 판 첫 착수는 T=1.5, 전체 착수 10개 미만은 선택 난이도 T×1.5를 적용합니다. 색은 매 판 교대하고 같은 색교환 쌍에는 같은 seed를 씁니다.
       연속 무착수 16턴은 별도 비정상 종료로 집계합니다.
     </p>
   </section>
@@ -175,7 +175,7 @@
   </section>
 </main>
 
-<script src="engine.js?v=arena-20261031"></script>
+<script src="engine.js?v=arena-20261031-2"></script>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
 <script>
   window.__arenaRealOrtCreate = ort.InferenceSession.create.bind(ort.InferenceSession);
@@ -187,11 +187,11 @@
   };
   var module = { exports: {} };
 </script>
-<script src="model.js?v=arena-20261031"></script>
+<script src="model.js?v=arena-20261031-2"></script>
 <script>
   window.SIXMOK_MODEL_CORE = module.exports;
   ort.InferenceSession.create = window.__arenaRealOrtCreate;
 </script>
-<script src="arena.js?v=2"></script>
+<script src="arena.js?v=3"></script>
 </body>
 </html>
