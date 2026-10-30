@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>육목 모델 아레나</title>
+<style>
+  :root {
+    --bg: #101413;
+    --panel: #151d1c;
+    --panel-2: #1a2321;
+    --line: #2f403c;
+    --text: #ede7da;
+    --dim: #9aa6a1;
+    --accent: #86b8a8;
+    --warn: #c89b3c;
+    --a: #89b8d4;
+    --b: #d6a57f;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); }
+  a { color: var(--accent); }
+  button, select, input {
+    font: inherit; color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  input[type="file"] { width: 100%; }
+  input[type="number"] { width: 120px; }
+  .topbar {
+    padding: 18px 22px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap;
+  }
+  .topbar h1 { margin: 0; font-size: 22px; letter-spacing: .04em; }
+  .topbar p { margin: 0; color: var(--dim); font-size: 13px; }
+  .topbar a { margin-left: auto; font-size: 13px; text-decoration: none; }
+  main { width: min(1180px, calc(100% - 28px)); margin: 22px auto 42px; }
+  .models { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .model-title { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .model-title h2 { margin: 0; font-size: 17px; }
+  .chip { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 3px 8px; color: #101413; }
+  .chip.a { background: var(--a); }
+  .chip.b { background: var(--b); }
+  label { display: block; color: var(--dim); font-size: 12px; margin: 12px 0 6px; }
+  .status { min-height: 1.4em; margin-top: 8px; color: var(--dim); font-size: 12px; overflow-wrap: anywhere; }
+  .status.ok { color: var(--accent); }
+  .status.error { color: var(--warn); }
+  .settings { margin-top: 14px; display: flex; gap: 16px; align-items: end; flex-wrap: wrap; }
+  .settings .field label { margin-top: 0; }
+  .actions { margin-left: auto; display: flex; gap: 8px; }
+  .primary { background: var(--accent); color: #0d1513; border-color: var(--accent); font-weight: 700; }
+  .note { margin: 12px 0 0; font-size: 12px; line-height: 1.6; color: var(--dim); }
+  .progress { margin-top: 14px; }
+  .progress-line { height: 7px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+  #progress-bar { height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
+  #progress-text { margin-top: 8px; color: var(--dim); font-size: 12px; }
+  #summary { margin-top: 14px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .score, .metric, .empty { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 14px; }
+  .score { text-align: center; }
+  .score span, .metric span { display: block; color: var(--dim); font-size: 11px; margin-bottom: 6px; }
+  .score strong { display: block; font-size: 28px; }
+  .score small { display: block; color: var(--dim); margin-top: 4px; }
+  .score.a strong { color: var(--a); }
+  .score.b strong { color: var(--b); }
+  .metric strong { font-size: 14px; font-weight: 650; }
+  .empty { grid-column: 1 / -1; color: var(--dim); text-align: center; }
+  .table-card { margin-top: 14px; padding: 0; overflow: hidden; }
+  .table-head { padding: 13px 15px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+  .table-head h2 { margin: 0; font-size: 14px; }
+  .table-head .actions { margin-left: auto; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 780px; }
+  th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { color: var(--dim); font-weight: 600; background: var(--panel-2); }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.a-win { color: var(--a); font-weight: 700; }
+  td.b-win { color: var(--b); font-weight: 700; }
+  @media (max-width: 760px) {
+    .models { grid-template-columns: 1fr; }
+    #summary { grid-template-columns: 1fr 1fr; }
+    .score.draw { grid-column: 1 / -1; order: 3; }
+    .settings { align-items: stretch; }
+    .actions { width: 100%; margin-left: 0; }
+    .actions button { flex: 1; }
+    .topbar a { margin-left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <h1>육목 모델 아레나</h1>
+  <p>브라우저에서 두 ONNX 모델을 직접 대국시킵니다.</p>
+  <a href="index.html">게임 화면으로 돌아가기 →</a>
+</header>
+
+<main>
+  <section class="models">
+    <div class="card">
+      <div class="model-title"><span class="chip a">A</span><h2>모델 A</h2></div>
+      <label for="model-a-file">ONNX 파일</label>
+      <input id="model-a-file" type="file" accept=".onnx,application/octet-stream">
+      <label for="level-a">웹 난이도</label>
+      <select id="level-a">
+        <option value="easy">쉬움 · T 0.7</option>
+        <option value="normal" selected>보통 · T 0.5</option>
+        <option value="hard">어려움 · T 0.3</option>
+      </select>
+      <div id="model-a-status" class="status">파일 미선택</div>
+    </div>
+
+    <div class="card">
+      <div class="model-title"><span class="chip b">B</span><h2>모델 B</h2></div>
+      <label for="model-b-file">ONNX 파일</label>
+      <input id="model-b-file" type="file" accept=".onnx,application/octet-stream">
+      <label for="level-b">웹 난이도</label>
+      <select id="level-b">
+        <option value="easy">쉬움 · T 0.7</option>
+        <option value="normal" selected>보통 · T 0.5</option>
+        <option value="hard">어려움 · T 0.3</option>
+      </select>
+      <div id="model-b-status" class="status">파일 미선택</div>
+    </div>
+  </section>
+
+  <section class="card settings">
+    <div class="field">
+      <label for="games">대국 수</label>
+      <input id="games" type="number" min="1" max="1000" step="1" value="20">
+    </div>
+    <div class="field">
+      <label for="seed">Seed</label>
+      <input id="seed" type="number" min="0" max="4294967295" step="1" value="20261031">
+    </div>
+    <div class="actions">
+      <button id="start" class="primary">대국 시작</button>
+      <button id="stop" disabled>중단</button>
+    </div>
+    <p class="note">
+      각 모델은 현재 웹과 같은 3후보 1-ply P×V 정책을 사용합니다. 빈 판 첫 착수는 T=1.5, 전체 착수 10개 미만은 선택 난이도 T×1.5,
+      이후는 난이도 기본값을 사용하며 빈 판을 제외하면 최고 가중치의 5% 미만 후보를 버립니다. 색은 매 판 교대하고 같은 색교환 쌍에는 같은 seed를 씁니다.
+      연속 무착수 16턴은 별도 비정상 종료로 집계합니다.
+    </p>
+  </section>
+
+  <section class="progress">
+    <div class="progress-line"><div id="progress-bar"></div></div>
+    <div id="progress-text">대기 중</div>
+  </section>
+
+  <section id="summary"><div class="empty">대국을 시작하면 결과가 표시됩니다.</div></section>
+
+  <section class="card table-card">
+    <div class="table-head">
+      <h2>최근 대국 결과</h2>
+      <div class="actions">
+        <button id="export" disabled>JSON 저장</button>
+        <button id="clear">표시 지우기</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>흑</th><th>백</th><th>결과</th><th>턴</th><th>돌</th><th>무착수 턴</th><th>시간</th>
+          </tr>
+        </thead>
+        <tbody id="games-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script src="engine.js?v=arena-20261031"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+<script>
+  window.__arenaRealOrtCreate = ort.InferenceSession.create.bind(ort.InferenceSession);
+  ort.InferenceSession.create = (source, options) => {
+    if (typeof source === 'string' && source.startsWith('sixmok.onnx')) {
+      return Promise.resolve({ run: async () => { throw new Error('arena library-only session'); } });
+    }
+    return window.__arenaRealOrtCreate(source, options);
+  };
+  var module = { exports: {} };
+</script>
+<script src="model.js?v=arena-20261031"></script>
+<script>
+  window.SIXMOK_MODEL_CORE = module.exports;
+  ort.InferenceSession.create = window.__arenaRealOrtCreate;
+</script>
+<script src="arena.js?v=2"></script>
+</body>
+</html>
