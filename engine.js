@@ -310,16 +310,13 @@ function candidates(game, radius = 2) {
   return [...seen].map((i) => [Math.floor(i / n), i % n]);
 }
 
-/* 난이도. 세 값이 함께 움직인다.
-   mistake  : 최선 대신 아무 후보나 두는 확률
-   defense  : 상대를 막는 수에 얼마나 무게를 둘지
-   hoard    : 돌을 아꼈다가 세 개를 몰아 둘지
-   temperature : 학습 모델의 최종 후보 가중치에 적용. 0이면 최선, 클수록 흔들린다.
-   lookahead   : 학습 모델 탐색 폭. */
+/* 난이도.
+   규칙 기반 fallback의 mistake/defense/hoard 값은 기존 동작을 유지한다.
+   학습 모델은 세 난이도 모두 같은 3갈래 1-ply P×V 탐색을 쓰고 temperature만 다르게 적용한다. */
 const AI_LEVELS = {
-  easy:   { label: '쉬움',   mistake: 0.35, defense: 0.40, hoard: false, temperature: 1.4, lookahead: 0 },
-  normal: { label: '보통',   mistake: 0.12, defense: 0.75, hoard: true,  temperature: 0.6, lookahead: 3 },
-  hard:   { label: '어려움', mistake: 0.00, defense: 1.00, hoard: true,  temperature: 0.0, lookahead: 6 },
+  easy:   { label: '쉬움',   mistake: 0.35, defense: 0.40, hoard: false, temperature: 0.7, lookahead: 3 },
+  normal: { label: '보통',   mistake: 0.12, defense: 0.75, hoard: true,  temperature: 0.5, lookahead: 3 },
+  hard:   { label: '어려움', mistake: 0.00, defense: 1.00, hoard: true,  temperature: 0.3, lookahead: 3 },
 };
 
 function bestPoint(game, color, defenseWeight = 1.0) {
