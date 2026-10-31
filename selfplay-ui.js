@@ -1,7 +1,6 @@
 (() => {
   'use strict';
   const $ = (id) => document.getElementById(id);
-  let latest = null;
 
   function pct(v, digits = 2) {
     return Number.isFinite(v) ? (v * 100).toFixed(digits) + '%' : '—';
@@ -9,78 +8,67 @@
   function num(v, digits = 4) {
     return Number.isFinite(v) ? v.toFixed(digits) : '—';
   }
-  function actionLabel(row) {
-    return row.isEnd ? 'END_TURN' : `${row.row + 1}·${row.col + 1}`;
-  }
 
-  function renderSummary(data) {
-    const node = $('analysis-summary');
-    if (!node) return;
-    const greedy = data.rows.find((row) => row.greedy);
-    const levelCards = ['easy', 'normal', 'hard'].map((key) => {
-      const level = data.levels[key];
-      return `<div class="metric"><span>${level.label} T</span><strong>${num(level.effectiveTemperature, 2)}</strong><small>base ${num(level.baseTemperature, 2)} · 컷 ${pct(level.cutoffRel, 0)} · ${level.eligibleCount}수</small></div>`;
-    }).join('');
-    node.innerHTML = `
-      <div class="metric hero"><span>Greedy 추천</span><strong>${greedy ? actionLabel(greedy) : '—'}</strong><small>${data.decisionPath}</small></div>
-      <div class="metric"><span>Root value</span><strong>${num(data.rootValue, 4)}</strong><small>승률 환산 ${pct(data.rootWinProb)}</small></div>
-      <div class="metric"><span>Policy entropy</span><strong>${num(data.rootPolicyEntropy, 4)}</strong><small>합법 ${data.legalCount} · 평가 후보 ${data.actualCandidateCount}</small></div>
-      ${levelCards}
-    `;
-    const meta = $('analysis-meta');
-    if (meta) meta.textContent = `${data.inputPlanes || '?'}-plane · policy cutoff ${pct(data.policyCutoffRel, 0)} · cutoff 통과 후보만 child 평가 · 난수 샘플링 없음`;
-  }
-
-  function sortedRows(data) {
-    const key = $('analysis-sort')?.value || 'greedy';
-    const rows = [...data.rows];
-    const cmp = {
-      greedy: (a, b) => (b.selectionWeight - a.selectionWeight) || (a.action - b.action),
-      policy: (a, b) => (b.policy - a.policy) || (a.action - b.action),
-      value: (a, b) => (b.childValue - a.childValue) || (b.policy - a.policy),
-      easy: (a, b) => (b.levels.easy.probability - a.levels.easy.probability) || (a.action - b.action),
-      normal: (a, b) => (b.levels.normal.probability - a.levels.normal.probability) || (a.action - b.action),
-      hard: (a, b) => (b.levels.hard.probability - a.levels.hard.probability) || (a.action - b.action),
-    }[key];
-    return rows.sort(cmp);
-  }
-
-  function renderTable(data) {
-    const body = $('analysis-body');
-    if (!body) return;
-    body.textContent = '';
-    const rows = sortedRows(data);
-    rows.forEach((row, idx) => {
-      const tr = document.createElement('tr');
-      if (row.greedy) tr.classList.add('greedy-row');
-      tr.innerHTML = `
-        <td>${idx + 1}</td>
-        <td><strong>${actionLabel(row)}</strong>${row.greedy ? '<span class="greedy-mark">G</span>' : ''}</td>
-        <td>${row.policyRank ?? '—'}</td>
-        <td>${pct(row.policy, 3)}</td>
-        <td>${num(row.rawLogit, 3)}</td>
-        <td>${num(row.childValue, 4)}</td>
-        <td>${pct(row.winProb)}</td>
-        <td>${num(row.pv, 6)}</td>
-        <td>${num(row.modifier, 4)}</td>
-        <td>${num(row.selectionWeight, 6)}</td>
-        <td>${row.reason}</td>
-        <td class="temp ${row.levels.easy.eligible ? '' : 'off'}">${pct(row.levels.easy.probability, 3)}</td>
-        <td class="temp ${row.levels.normal.eligible ? '' : 'off'}">${pct(row.levels.normal.probability, 3)}</td>
-        <td class="temp ${row.levels.hard.eligible ? '' : 'off'}">${pct(row.levels.hard.probability, 3)}</td>
+  function renderAnalysis(data) {
+    const g = data.greedy;
+    const summary = $('analysis-summary');
+    if (summary) {
+      summary.innerHTML = `
+        <div class="metric hero"><span>Greedy 추천</span><strong>${g.label}</strong><small>${g.reason}</small></div>
+        <div class="metric"><span>Greedy score</span><strong>${num(g.score, 6)}</strong><small>보정 ${num(g.modifier, 4)}</small></div>
+        <div class="metric"><span>Policy</span><strong>${pct(g.policy, 3)}</strong><small>전체 합법수 중 ${g.policyRank || '—'}위 · logit ${num(g.rawLogit, 3)}</small></div>
+        <div class="metric"><span>Child value</span><strong>${num(g.childValue, 4)}</strong><small>승률 환산 ${pct(g.winProb)}</small></div>
+        <div class="metric"><span>P×V</span><strong>${num(g.pv, 6)}</strong><small>${data.decisionPath}</small></div>
+        <div class="metric"><span>Root value</span><strong>${num(data.rootValue, 4)}</strong><small>승률 환산 ${pct(data.rootWinProb)}</small></div>
       `;
-      body.appendChild(tr);
-    });
-    const count = $('analysis-count');
-    if (count) count.textContent = `${rows.length}개 cutoff 후보 표시 · 전체 합법 ${data.legalCount}개 · child 평가 ${data.evaluatedChildCount ?? rows.length}개`;
+    }
+    const meta = $('analysis-meta');
+    if (meta) {
+      meta.textContent = `${data.inputPlanes || '?'}-plane · policy cutoff ${pct(data.policyCutoffRel, 0)} · child 평가 ${data.childEvaluatedCount} · 난수 없음`;
+    }
   }
 
-  function render(data) {
-    latest = data;
-    renderSummary(data);
-    renderTable(data);
+  function renderKifu(detail) {
+    const pos = $('kifu-pos');
+    if (pos) pos.textContent = `${detail.index} / ${detail.total}`;
+    const prev = $('kifu-prev');
+    const next = $('kifu-next');
+    const first = $('kifu-first');
+    const last = $('kifu-last');
+    if (prev) prev.disabled = detail.index <= 0;
+    if (first) first.disabled = detail.index <= 0;
+    if (next) next.disabled = detail.index >= detail.total;
+    if (last) last.disabled = detail.index >= detail.total;
+
+    const list = $('kifu-list');
+    if (!list) return;
+    list.textContent = '';
+    if (!detail.items.length) {
+      list.innerHTML = '<span class="kifu-empty">아직 둔 수가 없습니다.</span>';
+      return;
+    }
+    for (const item of detail.items) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'kifu-item' + (item.index === detail.index ? ' active' : '') + (item.isEnd ? ' end' : '');
+      button.dataset.index = String(item.index);
+      button.innerHTML = item.isEnd
+        ? `<span class="kifu-color">${item.color}</span><span>턴 끝</span>`
+        : `<span class="kifu-no">${item.stoneNo}.</span><span class="kifu-color">${item.color}</span><strong>${item.label}</strong>`;
+      list.appendChild(button);
+    }
+    list.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
   }
 
-  window.addEventListener('model-analysis', (event) => render(event.detail));
-  $('analysis-sort')?.addEventListener('change', () => { if (latest) renderTable(latest); });
+  window.addEventListener('model-analysis', (e) => renderAnalysis(e.detail));
+  window.addEventListener('kifu-update', (e) => renderKifu(e.detail));
+
+  $('kifu-first')?.addEventListener('click', () => window.SELFPLAY_REVIEW?.first());
+  $('kifu-prev')?.addEventListener('click', () => window.SELFPLAY_REVIEW?.prev());
+  $('kifu-next')?.addEventListener('click', () => window.SELFPLAY_REVIEW?.next());
+  $('kifu-last')?.addEventListener('click', () => window.SELFPLAY_REVIEW?.last());
+  $('kifu-list')?.addEventListener('click', (e) => {
+    const button = e.target.closest('[data-index]');
+    if (button) window.SELFPLAY_REVIEW?.goto(Number(button.dataset.index));
+  });
 })();
