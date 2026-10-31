@@ -10,7 +10,7 @@ const DEFAULTS = {
   boardSize: 19,
   winLength: 6,
   maxPlacesPerTurn: 3,
-  stonesGainedPerTurn: 2,
+  stonesGainedPerTurn: 1,
   blackStartStones: 1,
   whiteStartStones: 2,
   drawFillRatio: 0.70,
