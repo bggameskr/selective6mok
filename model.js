@@ -1,11 +1,12 @@
 /* 학습한 모델을 브라우저 게임에 붙인다.
 
    모든 난이도는 강제승/필수방어를 보존한 1-ply policy×value 평가를 공통으로 쓴다.
-   일반 상황에서는 root policy의 상대 컷오프를 통과한 착점을 후보로 삼고,
+   일반 상황에서는 root policy 최고값의 20% 이상인 착점을 후보로 삼고,
    살아남은 후보만 child value를 평가한다. 후보 개수 자체에는 상한을 두지 않는다.
    END_TURN은 policy 컷오프와 무관하게 항상 후보로 유지한다.
-   난이도 차이는 policy 컷오프, P×V 가중치 컷오프, temperature로 조절한다.
-   빈 판 첫 착수는 T=1.5, 초반 10수는 기본 T×1.5를 적용한다.
+   빈 판 첫 착수는 child 탐색 없이 root policy만 사용해 T=1.5로 바로 선택한다.
+   난이도 차이는 P×V 가중치 컷오프와 temperature로 조절한다.
+   전체 착수 10개 미만은 기본 T×1.5를 적용한다.
    빈 판을 제외하면 난이도별 기준보다 낮은 P×V 가중치 후보는 샘플링에서 제외한다.
 
    13평면(v5.10+)과 구형 16평면 ONNX를 모두 지원한다.
@@ -16,11 +17,11 @@
 (() => {
   'use strict';
 
-  const MODEL_URL = 'sixmok.onnx?v=6.2-policy-cutoff-1';
+  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening-root-1';
   const MODEL_BOARD_SIZE = 19;
   const VALUE_WEIGHT_FLOOR = 1e-6;
   const DEFAULT_WEIGHT_CUTOFF_REL = 0.05;
-  const DEFAULT_POLICY_CUTOFF_REL = 0.03;
+  const DEFAULT_POLICY_CUTOFF_REL = 0.20;
   const OPENING_TEMPERATURE = 1.5;
   const EARLY_ACTIONS = 10;
   const EARLY_TEMPERATURE_MULTIPLIER = 1.5;
@@ -202,13 +203,7 @@
     return base;
   }
 
-  function policyCutoffForLevel(level, weightCutoffRel = DEFAULT_WEIGHT_CUTOFF_REL) {
-    if (Number.isFinite(level && level.policyCutoffRel)) {
-      return Math.max(0, Math.min(1, level.policyCutoffRel));
-    }
-    if (weightCutoffRel <= 0.0200001) return 0.01;
-    if (weightCutoffRel <= 0.0500001) return 0.03;
-    if (weightCutoffRel >= 0.0999999) return 0.05;
+  function policyCutoffForLevel() {
     return DEFAULT_POLICY_CUTOFF_REL;
   }
 
@@ -258,6 +253,29 @@
       if (roll <= 0) return indices[j];
     }
     return indices[indices.length - 1];
+  }
+
+  function openingActionFromPolicy(game, probs, policyCutoffRel = DEFAULT_POLICY_CUTOFF_REL, rng = Math.random) {
+    if (game.stonesOnBoard !== 0 || !game.canPlace()) return -1;
+    const endIndex = game.size * game.size;
+    const placements = [];
+    let best = 0;
+    for (let i = 0; i < endIndex; i++) {
+      if (game.board[i] !== EMPTY) continue;
+      const p = Number.isFinite(probs[i]) ? Math.max(0, probs[i]) : 0;
+      if (p > best) best = p;
+      placements.push(i);
+    }
+    if (!placements.length) return -1;
+
+    const relative = Number.isFinite(policyCutoffRel)
+      ? Math.max(0, Math.min(1, policyCutoffRel))
+      : DEFAULT_POLICY_CUTOFF_REL;
+    const threshold = best * relative;
+    const candidates = best > 0
+      ? placements.filter((i) => Number.isFinite(probs[i]) && probs[i] >= threshold)
+      : placements;
+    return sampleWeightedIndices(candidates, (i) => probs[i], OPENING_TEMPERATURE, rng);
   }
 
   function findImmediateWin(game) {
@@ -440,12 +458,24 @@
     const endIndex = n * n;
     const baseTemperature = Number.isFinite(level.temperature) ? level.temperature : 0.5;
     const cutoffRel = Number.isFinite(level.cutoffRel) ? level.cutoffRel : DEFAULT_WEIGHT_CUTOFF_REL;
-    const policyCutoffRel = policyCutoffForLevel(level, cutoffRel);
+    const policyCutoffRel = policyCutoffForLevel();
     const rng = options.rng || Math.random;
     const sim = game.clone();
     const moves = [];
 
     while (sim.canPlace()) {
+      if (sim.stonesOnBoard === 0) {
+        const { policy, stride } = await evaluateFn([sim]);
+        const probs = legalProbs(policy, sim, 0, stride);
+        const index = openingActionFromPolicy(sim, probs, policyCutoffRel, rng);
+        if (index < 0 || index === endIndex) break;
+        const r = Math.floor(index / n), c = index % n;
+        sim.place(r, c);
+        moves.push([r, c]);
+        if (sim.isOver) break;
+        continue;
+      }
+
       const win = findImmediateWin(sim);
       if (win >= 0) {
         sim.place(Math.floor(win / n), win % n);
@@ -492,7 +522,7 @@
 
   if (typeof module !== 'undefined') {
     module.exports = {
-      planTurnWithModel, pickWithLookahead, candidateActions,
+      planTurnWithModel, pickWithLookahead, candidateActions, openingActionFromPolicy,
       oneTurnWinningWindows, oneTurnWinningSquares, oneTurnDefenseSquares,
       availablePlacements, legalProbs, findImmediateWin,
       valueWinProb, policyValueWeight, emptyEndStockMultiplier,
