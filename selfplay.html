@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="play.css?v=3">
+<link rel="stylesheet" href="play.css?v=4">
 <link rel="stylesheet" href="selfplay.css?v=4">
 </head>
 <body data-mode="self">
@@ -25,19 +25,29 @@
     <div class="result" id="result" hidden><div class="result-card"><h2 id="result-title"></h2><p id="result-detail"></p><button class="primary" id="result-new">새 판</button></div></div>
   </div>
   <aside class="rail">
-    <div class="rail-top">
-      <section class="turn-panel">
-        <p class="label">차례</p>
-        <div class="turn"><span id="turn-dot" class="dot"></span><span id="turn-text"></span></div>
-      </section>
-      <section class="kifu-top" aria-label="기보">
+    <div class="self-upper">
+      <div class="play-info">
+        <section>
+          <p class="label">차례</p>
+          <div class="turn"><span id="turn-dot" class="dot"></span><span id="turn-text"></span></div>
+        </section>
+        <div class="bank-grid">
+          <div><p class="label">돌 창고</p><div id="bank-black" class="bankline"></div><div id="bank-white" class="bankline"></div></div>
+          <div><p class="label">이번 턴</p><div id="slots" class="slots"></div></div>
+        </div>
+        <div id="recommend" class="recommend"></div>
+        <div class="actions"><button id="undo">무르기</button><button class="primary" id="end-turn">턴 마치기</button></div>
+        <p id="hint" class="hint"></p>
+      </div>
+
+      <section class="kifu-panel" aria-label="기보">
         <div class="kifu-head">
           <span class="label">기보</span>
           <div class="review-nav" aria-label="기보 탐색">
             <button id="kifu-first" title="처음">|◀</button>
-            <button id="kifu-prev" title="이전">◀</button>
-            <span id="kifu-pos">0 / 0</span>
-            <button id="kifu-next" title="다음">▶</button>
+            <button id="kifu-prev" title="이전 턴">◀</button>
+            <span id="kifu-pos">시작</span>
+            <button id="kifu-next" title="다음 턴">▶</button>
             <button id="kifu-last" title="최신">▶|</button>
           </div>
         </div>
@@ -45,25 +55,20 @@
       </section>
     </div>
 
-    <div class="bank-grid"><div><p class="label">돌 창고</p><div id="bank-black" class="bankline"></div><div id="bank-white" class="bankline"></div></div><div><p class="label">이번 턴</p><div id="slots" class="slots"></div></div></div>
-    <div id="recommend" class="recommend"></div>
-    <div class="actions"><button id="undo">무르기</button><button class="primary" id="end-turn">턴 마치기</button></div>
-    <p id="hint" class="hint"></p>
-
-    <div class="analysis-head"><p class="label">Greedy 모델 분석</p></div>
-    <div id="analysis-meta" class="analysis-meta">모델 분석 준비 중…</div>
-    <div id="analysis-summary" class="analysis-summary"></div>
-
-    <div class="candidate-head"><span class="label">연산 후보</span><span id="candidate-count" class="analysis-count"></span></div>
-    <div class="candidate-table-wrap">
-      <table class="candidate-table">
-        <thead><tr>
-          <th>#</th><th>행동</th><th>P순위</th><th>Policy</th><th>Logit</th><th>Child V</th><th>승률</th><th>P×V</th><th>보정</th><th>Greedy score / 근거</th>
-        </tr></thead>
-        <tbody id="candidate-body"><tr><td colspan="10">모델 계산 중…</td></tr></tbody>
-      </table>
-    </div>
-    <div class="log" id="log" aria-live="polite"></div>
+    <section class="analysis-section">
+      <div class="analysis-head"><p class="label">Greedy 모델 분석</p></div>
+      <div id="analysis-meta" class="analysis-meta">모델 분석 준비 중…</div>
+      <div id="analysis-summary" class="analysis-summary"></div>
+      <div class="candidate-head"><span class="label">연산 후보</span><span id="candidate-count" class="analysis-count"></span></div>
+      <div class="candidate-table-wrap">
+        <table class="candidate-table">
+          <thead><tr>
+            <th>#</th><th>행동</th><th>P순위</th><th>Policy</th><th>Logit</th><th>Child V</th><th>승률</th><th>P×V</th><th>보정</th><th>Greedy score / 근거</th>
+          </tr></thead>
+          <tbody id="candidate-body"><tr><td colspan="10">모델 계산 중…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
   </aside>
 </main>
 <script src="engine.js?v=start-stones-1-2"></script>
@@ -85,6 +90,6 @@
 </script>
 <script src="model-inspector.js?v=4"></script>
 <script src="selfplay-ui.js?v=4"></script>
-<script src="selfplay-play.js?v=2"></script>
+<script src="play.js?v=4"></script>
 </body>
 </html>
