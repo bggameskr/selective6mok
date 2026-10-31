@@ -312,11 +312,11 @@ function candidates(game, radius = 2) {
 
 /* 난이도.
    규칙 기반 fallback의 mistake/defense/hoard 값은 기존 동작을 유지한다.
-   학습 모델은 같은 1-ply P×V 평가를 쓰고 후보 폭, temperature, 가중치 컷오프로 난이도를 나눈다. */
+   학습 모델은 모든 합법 후보를 같은 1-ply P×V로 평가하고 temperature와 가중치 컷오프로 난이도를 나눈다. */
 const AI_LEVELS = {
-  easy:   { label: '쉬움',   mistake: 0.35, defense: 0.40, hoard: false, temperature: 1.2, lookahead: 8, cutoffRel: 0.02 },
-  normal: { label: '보통',   mistake: 0.12, defense: 0.75, hoard: true,  temperature: 0.6, lookahead: 5, cutoffRel: 0.05 },
-  hard:   { label: '어려움', mistake: 0.00, defense: 1.00, hoard: true,  temperature: 0.3, lookahead: 3, cutoffRel: 0.10 },
+  easy:   { label: '쉬움',   mistake: 0.35, defense: 0.40, hoard: false, temperature: 1.2, cutoffRel: 0.02 },
+  normal: { label: '보통',   mistake: 0.12, defense: 0.75, hoard: true,  temperature: 0.6, cutoffRel: 0.05 },
+  hard:   { label: '어려움', mistake: 0.00, defense: 1.00, hoard: true,  temperature: 0.3, cutoffRel: 0.10 },
 };
 
 function bestPoint(game, color, defenseWeight = 1.0) {
