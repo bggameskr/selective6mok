@@ -4,7 +4,7 @@
    일반 상황에서는 root policy 최고값의 20% 이상인 착점을 후보로 삼고,
    살아남은 후보만 child value를 평가한다. 후보 개수 자체에는 상한을 두지 않는다.
    END_TURN은 policy 컷오프와 무관하게 항상 후보로 유지한다.
-   빈 판은 child 탐색 없이 root policy만 사용하며, 착점 35% 컷과 END_TURN을 함께 T=1.0으로 선택한다.
+   빈 판은 child 탐색 없이 root policy만 사용하며, 361개 착점과 END_TURN 1개를 같은 362개 행동으로 비교해 최고 policy의 5% 이상만 T=1.0으로 선택한다.
    난이도 차이는 P×V 가중치 컷오프와 temperature로 조절한다.
    전체 착수 10개 미만은 기본 T×1.5를 적용한다.
    빈 판을 제외하면 난이도별 기준보다 낮은 P×V 가중치 후보는 샘플링에서 제외한다.
@@ -17,12 +17,12 @@
 (() => {
   'use strict';
 
-  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening35-t1';
+  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening05-all362-t1';
   const MODEL_BOARD_SIZE = 19;
   const VALUE_WEIGHT_FLOOR = 1e-6;
   const DEFAULT_WEIGHT_CUTOFF_REL = 0.05;
   const DEFAULT_POLICY_CUTOFF_REL = 0.20;
-  const OPENING_POLICY_CUTOFF_REL = 0.35;
+  const OPENING_POLICY_CUTOFF_REL = 0.05;
   const OPENING_TEMPERATURE = 1.0;
   const EARLY_ACTIONS = 10;
   const EARLY_TEMPERATURE_MULTIPLIER = 1.5;
@@ -259,23 +259,22 @@
   function openingActionFromPolicy(game, probs, policyCutoffRel = OPENING_POLICY_CUTOFF_REL, rng = Math.random) {
     if (game.stonesOnBoard !== 0 || !game.canPlace()) return -1;
     const endIndex = game.size * game.size;
-    const placements = [];
-    let bestPlacement = 0;
-    for (let i = 0; i < endIndex; i++) {
-      if (game.board[i] !== EMPTY) continue;
+    const actions = [];
+    let bestPolicy = 0;
+    for (let i = 0; i <= endIndex; i++) {
+      if (i < endIndex && game.board[i] !== EMPTY) continue;
       const p = Number.isFinite(probs[i]) ? Math.max(0, probs[i]) : 0;
-      if (p > bestPlacement) bestPlacement = p;
-      placements.push(i);
+      if (p > bestPolicy) bestPolicy = p;
+      actions.push(i);
     }
 
     const relative = Number.isFinite(policyCutoffRel)
       ? Math.max(0, Math.min(1, policyCutoffRel))
       : OPENING_POLICY_CUTOFF_REL;
-    const threshold = bestPlacement * relative;
-    const candidates = bestPlacement > 0
-      ? placements.filter((i) => Number.isFinite(probs[i]) && probs[i] >= threshold)
-      : placements.slice();
-    candidates.push(endIndex);
+    const threshold = bestPolicy * relative;
+    const candidates = bestPolicy > 0
+      ? actions.filter((i) => Number.isFinite(probs[i]) && probs[i] >= threshold)
+      : actions.slice();
 
     return sampleWeightedIndices(
       candidates,
