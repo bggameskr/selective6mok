@@ -2,10 +2,10 @@
   'use strict';
 
   const CORE = window.SIXMOK_MODEL_CORE;
-  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening35-t1-inspector-greedy';
+  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening05-all362-t1-inspector-greedy';
   const MODEL_BOARD_SIZE = 19;
   const DEFAULT_POLICY_CUTOFF_REL = 0.20;
-  const OPENING_POLICY_CUTOFF_REL = 0.35;
+  const OPENING_POLICY_CUTOFF_REL = 0.05;
 
   if (!CORE || typeof ort === 'undefined') {
     window.MODEL_STATUS = 'failed';
@@ -62,19 +62,24 @@
   function openingCandidates(game, probs) {
     const endIndex = game.size * game.size;
     if (!game.canPlace()) return [endIndex];
+    const actions = [];
     let best = 0;
-    for (let i = 0; i < endIndex; i++) if (game.board[i] === EMPTY) best = Math.max(best, Number(probs[i]) || 0);
+    for (let i = 0; i <= endIndex; i++) {
+      if (i < endIndex && game.board[i] !== EMPTY) continue;
+      const p = Number(probs[i]) || 0;
+      if (p > best) best = p;
+      actions.push(i);
+    }
     const threshold = best * OPENING_POLICY_CUTOFF_REL;
-    const out = [];
-    for (let i = 0; i < endIndex; i++) if (game.board[i] === EMPTY && (Number(probs[i]) || 0) >= threshold) out.push(i);
-    out.push(endIndex);
-    return out;
+    return best > 0
+      ? actions.filter((i) => Number.isFinite(probs[i]) && probs[i] >= threshold)
+      : actions;
   }
   function actionLabel(action, n) { return action === n * n ? 'END_TURN' : `${Math.floor(action / n) + 1}·${action % n + 1}`; }
   function reasonFor(game, action, immediateWin) {
     if (action === game.size * game.size) return 'END_TURN';
     if (action === immediateWin) return '즉시승 강제수';
-    if (game.stonesOnBoard === 0) return '오프닝 35% policy cutoff 통과';
+    if (game.stonesOnBoard === 0) return '오프닝 전체 362행동 기준 5% policy cutoff 통과';
     return 'policy 20%/전술 필터 통과';
   }
 
