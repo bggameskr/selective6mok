@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>육목 — PVP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="play.css?v=2">
+</head>
+<body data-mode="pvp">
+<header class="topbar">
+  <a class="nav" href="index.html">← 메인</a>
+  <span class="brand">육목</span><span class="tag">PVP</span>
+  <div class="controls"><span class="mode-note">LOCAL</span><button id="new-game">새 판</button></div>
+</header>
+<main class="stage">
+  <div class="board-wrap">
+    <canvas id="board" tabindex="0" aria-label="육목 PVP 게임판"></canvas>
+    <div class="result" id="result" hidden><div class="result-card"><h2 id="result-title"></h2><p id="result-detail"></p><button class="primary" id="result-new">새 판</button></div></div>
+  </div>
+  <aside class="rail">
+    <div><p class="label">차례</p><div class="turn"><span id="turn-dot" class="dot"></span><span id="turn-text"></span></div></div>
+    <div class="bank-grid"><div><p class="label">돌 창고</p><div id="bank-black" class="bankline"></div><div id="bank-white" class="bankline"></div></div><div><p class="label">이번 턴</p><div id="slots" class="slots"></div></div></div>
+    <div class="actions"><button id="undo">무르기</button><button class="primary" id="end-turn">턴 마치기</button></div>
+    <p id="hint" class="hint"></p>
+    <div id="log" class="log" aria-live="polite"></div>
+  </aside>
+</main>
+<script src="engine.js?v=start-stones-1-2"></script>
+<script src="play.js?v=2"></script>
+</body>
+</html>
