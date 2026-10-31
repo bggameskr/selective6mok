@@ -24,21 +24,50 @@
     }
     const meta = $('analysis-meta');
     if (meta) {
-      meta.textContent = `${data.inputPlanes || '?'}-plane · policy cutoff ${pct(data.policyCutoffRel, 0)} · child 평가 ${data.childEvaluatedCount} · 난수 없음`;
+      meta.textContent = `${data.inputPlanes || '?'}-plane · policy cutoff ${pct(data.policyCutoffRel, 0)} · 후보 ${data.candidateCount}/${data.legalCount} · child 평가 ${data.childEvaluatedCount} · 난수 없음`;
+    }
+    renderCandidates(data.candidates || []);
+  }
+
+  function renderCandidates(rows) {
+    const body = $('candidate-body');
+    const count = $('candidate-count');
+    if (count) count.textContent = `cutoff/전술 필터 통과 ${rows.length}개 후보`;
+    if (!body) return;
+    body.textContent = '';
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="10">표시할 후보가 없습니다.</td></tr>';
+      return;
+    }
+    for (const row of rows) {
+      const tr = document.createElement('tr');
+      if (row.candidateRank === 1) tr.classList.add('greedy-row');
+      tr.innerHTML = `
+        <td>${row.candidateRank}</td>
+        <td><strong>${row.label}</strong></td>
+        <td>${row.policyRank || '—'}</td>
+        <td>${pct(row.policy, 3)}</td>
+        <td>${num(row.rawLogit, 3)}</td>
+        <td>${num(row.childValue, 4)}</td>
+        <td>${pct(row.winProb)}</td>
+        <td>${num(row.pv, 6)}</td>
+        <td>${num(row.modifier, 4)}</td>
+        <td>${num(row.score, 6)}<br><small>${row.reason}</small></td>
+      `;
+      body.appendChild(tr);
     }
   }
 
   function renderKifu(detail) {
     const pos = $('kifu-pos');
     if (pos) pos.textContent = `${detail.index} / ${detail.total}`;
-    const prev = $('kifu-prev');
-    const next = $('kifu-next');
-    const first = $('kifu-first');
-    const last = $('kifu-last');
-    if (prev) prev.disabled = detail.index <= 0;
-    if (first) first.disabled = detail.index <= 0;
-    if (next) next.disabled = detail.index >= detail.total;
-    if (last) last.disabled = detail.index >= detail.total;
+    for (const [id, disabled] of [
+      ['kifu-first', detail.index <= 0], ['kifu-prev', detail.index <= 0],
+      ['kifu-next', detail.index >= detail.total], ['kifu-last', detail.index >= detail.total],
+    ]) {
+      const node = $(id);
+      if (node) node.disabled = disabled;
+    }
 
     const list = $('kifu-list');
     if (!list) return;
