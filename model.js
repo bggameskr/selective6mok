@@ -4,7 +4,7 @@
    일반 상황에서는 root policy 최고값의 20% 이상인 착점을 후보로 삼고,
    살아남은 후보만 child value를 평가한다. 후보 개수 자체에는 상한을 두지 않는다.
    END_TURN은 policy 컷오프와 무관하게 항상 후보로 유지한다.
-   빈 판 첫 착수는 child 탐색 없이 root policy만 사용해 T=1.5로 바로 선택한다.
+   빈 판은 child 탐색 없이 root policy만 사용하며, 착점 20% 컷과 END_TURN을 함께 T=1.5로 선택한다.
    난이도 차이는 P×V 가중치 컷오프와 temperature로 조절한다.
    전체 착수 10개 미만은 기본 T×1.5를 적용한다.
    빈 판을 제외하면 난이도별 기준보다 낮은 P×V 가중치 후보는 샘플링에서 제외한다.
@@ -17,7 +17,7 @@
 (() => {
   'use strict';
 
-  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening-root-1';
+  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening-end-2';
   const MODEL_BOARD_SIZE = 19;
   const VALUE_WEIGHT_FLOOR = 1e-6;
   const DEFAULT_WEIGHT_CUTOFF_REL = 0.05;
@@ -259,23 +259,29 @@
     if (game.stonesOnBoard !== 0 || !game.canPlace()) return -1;
     const endIndex = game.size * game.size;
     const placements = [];
-    let best = 0;
+    let bestPlacement = 0;
     for (let i = 0; i < endIndex; i++) {
       if (game.board[i] !== EMPTY) continue;
       const p = Number.isFinite(probs[i]) ? Math.max(0, probs[i]) : 0;
-      if (p > best) best = p;
+      if (p > bestPlacement) bestPlacement = p;
       placements.push(i);
     }
-    if (!placements.length) return -1;
 
     const relative = Number.isFinite(policyCutoffRel)
       ? Math.max(0, Math.min(1, policyCutoffRel))
       : DEFAULT_POLICY_CUTOFF_REL;
-    const threshold = best * relative;
-    const candidates = best > 0
+    const threshold = bestPlacement * relative;
+    const candidates = bestPlacement > 0
       ? placements.filter((i) => Number.isFinite(probs[i]) && probs[i] >= threshold)
-      : placements;
-    return sampleWeightedIndices(candidates, (i) => probs[i], OPENING_TEMPERATURE, rng);
+      : placements.slice();
+    candidates.push(endIndex);
+
+    return sampleWeightedIndices(
+      candidates,
+      (i) => Math.max(Number.isFinite(probs[i]) ? probs[i] : 0, 0) * actionModifier(game, i),
+      OPENING_TEMPERATURE,
+      rng,
+    );
   }
 
   function findImmediateWin(game) {
