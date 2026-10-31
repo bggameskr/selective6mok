@@ -2,6 +2,8 @@
   'use strict';
 
   const BOARD_SIZE = 19;
+  const isSelfMode = document.body.dataset.mode === 'self';
+  let latestKifu = null;
 
   function boardGeometry() {
     const canvas = document.getElementById('board');
@@ -15,7 +17,7 @@
     return { wrap, canvasRect, wrapRect, pad, cell };
   }
 
-  function previousTurnMoves() {
+  function previousTurnFromHistory() {
     const game = window.SIXMOK_PLAY?.getShownGame?.();
     if (!game || !Array.isArray(game.history)) return [];
 
@@ -32,10 +34,30 @@
     for (let i = lastEnd - 1; i >= 0; i--) {
       const move = game.history[i]?.[1];
       if (move === END_TURN) break;
-      if (Array.isArray(move) && move.length === 2) moves.push(move);
+      if (Array.isArray(move) && move.length === 2) moves.push([...move]);
     }
     moves.reverse();
     return moves;
+  }
+
+  function previousTurnFromKifu() {
+    if (!latestKifu || latestKifu.index <= 0) return [];
+    const items = latestKifu.items || [];
+    const active = items.find((item) => item.positionIndex === latestKifu.index);
+    if (active?.complete) return (active.moves || []).map((move) => [...move]);
+
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      if (item.positionIndex < latestKifu.index && item.complete) {
+        return (item.moves || []).map((move) => [...move]);
+      }
+    }
+    return [];
+  }
+
+  function previousTurnMoves() {
+    if (isSelfMode && latestKifu) return previousTurnFromKifu();
+    return previousTurnFromHistory();
   }
 
   function ensureLayer(wrap) {
@@ -67,8 +89,16 @@
   }
 
   const scheduleRender = () => requestAnimationFrame(renderPreviousTurnMarkers);
-  window.addEventListener('kifu-update', scheduleRender);
+
+  window.addEventListener('kifu-update', (event) => {
+    latestKifu = event.detail || null;
+    scheduleRender();
+  });
   window.addEventListener('resize', scheduleRender);
   window.addEventListener('load', scheduleRender);
+
+  const slots = document.getElementById('slots');
+  if (slots) new MutationObserver(scheduleRender).observe(slots, { childList: true });
+
   scheduleRender();
 })();
