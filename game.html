@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>육목 게임</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#101413;--field:#1a2321;--edge:#253230;--line:#3d524d;--paper:#ede7da;
+    --dim:#9aa6a1;--accent:#86b8a8;--brass:#c89b3c;--rail:#151d1c;
+    --display:'Gowun Batang',serif;--ui:'IBM Plex Sans KR',system-ui,sans-serif;--mono:'IBM Plex Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box} html,body{margin:0;height:100%;background:var(--ink);color:var(--paper);font-family:var(--ui)}
+  body{display:flex;flex-direction:column;min-height:100dvh}
+  button,select,a.nav{font:13px var(--ui);color:var(--paper);background:transparent;border:1px solid var(--edge);border-radius:6px;padding:7px 11px;text-decoration:none;cursor:pointer}
+  button:hover:not(:disabled),select:hover,a.nav:hover{border-color:var(--accent)} button:disabled{opacity:.35;cursor:not-allowed}
+  .topbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--edge);flex-wrap:wrap}
+  .brand{font:700 22px var(--display);letter-spacing:.06em;margin-right:4px}.tag{font-size:12px;color:var(--dim)}
+  .controls{display:flex;gap:7px;align-items:center;margin-left:auto;flex-wrap:wrap}.badge{font:11px var(--mono);color:var(--dim);border:1px solid var(--edge);border-radius:5px;padding:5px 8px}.badge.ready{color:var(--accent);border-color:var(--accent)}.badge.error{color:var(--brass);border-color:var(--brass)}
+  .stage{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;min-height:0}.board-wrap{position:relative;display:grid;place-items:center;padding:16px;min-height:0}canvas{display:block;max-width:100%;border-radius:10px;touch-action:manipulation;user-select:none}
+  .rail{background:var(--rail);border-left:1px solid var(--edge);padding:18px;display:flex;flex-direction:column;gap:16px;min-height:0}.label{font:10px var(--mono);letter-spacing:.15em;color:var(--dim);text-transform:uppercase;margin:0 0 7px}.turn{display:flex;align-items:center;gap:8px}.dot{width:13px;height:13px;border-radius:50%;border:1px solid var(--line)}
+  .bankline{display:flex;align-items:center;gap:6px;min-height:25px}.who{width:28px;font:10px var(--mono);color:var(--dim)}.token{width:19px;height:19px;border-radius:50%}.token.b{background:radial-gradient(circle at 34% 30%,#4a5350,#0d1110 70%)}.token.w{background:radial-gradient(circle at 34% 30%,#fff,#bdb5a4 72%)}.count{font:12px var(--mono);color:var(--dim)}
+  .slots{display:flex;gap:6px}.slot{width:20px;height:20px;border-radius:50%;border:1px dashed var(--line)}.slot.on{border-style:solid;border-color:var(--accent);background:color-mix(in srgb,var(--accent) 24%,transparent)}.slot.lock{opacity:.3}
+  .actions{display:flex;gap:8px}.actions button{flex:1}.primary{background:var(--accent);border-color:var(--accent);color:#0e1615;font-weight:600}.hint,.recommend{font-size:12px;line-height:1.55;margin:0}.hint{color:var(--dim);min-height:2.5em}.recommend{padding:10px 11px;border:1px solid var(--edge);border-radius:8px;background:var(--field);color:var(--accent);min-height:3.2em}.recommend strong{color:var(--paper)}
+  .log{flex:1;overflow:auto;border-top:1px solid var(--edge);padding-top:10px;color:var(--dim);font:11px/1.7 var(--mono);min-height:70px}.log b{color:var(--paper);font-weight:500}
+  .result{position:absolute;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--ink) 75%,transparent);backdrop-filter:blur(2px)}.result[hidden]{display:none}.result-card{text-align:center;background:var(--rail);border:1px solid var(--edge);border-radius:10px;padding:26px 30px}.result-card h2{font:700 29px var(--display);margin:0 0 7px}.result-card p{color:var(--dim);font-size:13px;margin:0 0 16px}
+  @media(max-width:820px) and (orientation:portrait){html,body{height:100dvh;overflow:hidden}.topbar{padding:8px;gap:6px}.tag,.badge{display:none}.brand{font-size:20px}.controls{margin-left:auto;gap:5px}.controls select,.controls button,.controls a{font-size:11px;padding:6px 7px}.stage{display:flex;flex-direction:column;overflow:hidden}.board-wrap{flex:1;padding:4px 6px;overflow:hidden}.rail{flex:0 0 auto;border-left:0;border-top:1px solid var(--edge);padding:8px 10px calc(9px + env(safe-area-inset-bottom));gap:7px}.log{display:none}.recommend{min-height:0;padding:7px 8px}.hint{min-height:1.3em;height:1.3em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.bank-grid{display:grid;grid-template-columns:1fr auto;gap:12px}.actions button{min-height:38px}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="nav" href="index.html">← 메인</a>
+  <span class="brand">육목</span><span class="tag">게임 · 자율 대국</span>
+  <div class="controls">
+    <span id="ai-badge" class="badge">모델 불러오는 중</span>
+    <select id="mode" aria-label="게임 모드"><option value="ai">AI 대국</option><option value="self">자율 대국</option></select>
+    <select id="level" aria-label="난이도"><option value="easy">쉬움</option><option value="normal" selected>보통</option><option value="hard">어려움</option></select>
+    <select id="side" aria-label="내 색"><option value="1">흑으로 두기</option><option value="2">백으로 두기</option></select>
+    <button id="new-game">새 판</button>
+  </div>
+</header>
+<main class="stage">
+  <div class="board-wrap">
+    <canvas id="board" tabindex="0" aria-label="육목 게임판"></canvas>
+    <div class="result" id="result" hidden><div class="result-card"><h2 id="result-title"></h2><p id="result-detail"></p><button class="primary" id="result-new">새 판</button></div></div>
+  </div>
+  <aside class="rail">
+    <div><p class="label">차례</p><div class="turn"><span id="turn-dot" class="dot"></span><span id="turn-text"></span></div></div>
+    <div class="bank-grid">
+      <div><p class="label">돌 창고</p><div id="bank-black" class="bankline"></div><div id="bank-white" class="bankline"></div></div>
+      <div><p class="label">이번 턴</p><div id="slots" class="slots"></div></div>
+    </div>
+    <div id="recommend" class="recommend" hidden></div>
+    <div class="actions"><button id="undo">무르기</button><button class="primary" id="end-turn">턴 마치기</button></div>
+    <p id="hint" class="hint"></p>
+    <div id="log" class="log" aria-live="polite"></div>
+  </aside>
+</main>
+<script src="engine.js?v=6.1.3-1"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+<script>
+  window.AI_LEVEL = () => AI_LEVELS[document.getElementById('level')?.value || 'normal'] || AI_LEVELS.normal;
+</script>
+<script src="model.js?v=6.1.3-1"></script>
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const canvas = $('board'), ctx = canvas.getContext('2d');
+  const name = { [BLACK]:'흑', [WHITE]:'백' };
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const finePointer = matchMedia('(pointer:fine)').matches;
+  let game, mode='ai', humanColor=BLACK, busy=false, turnStart=null, hover=null, cursor=null, logs=[], resultShown=false;
+  let geom={pad:0,cell:0,px:0}, recommendation=null, recommendationText='', recommendationSeq=0;
+
+  function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
+  function xy(r,c){return [geom.pad+c*geom.cell,geom.pad+r*geom.cell]}
+  function radius(){return geom.cell*.44}
+  function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
+  function drawStone(r,c,color,alpha=1){const [x,y]=xy(r,c),rad=radius();ctx.save();ctx.globalAlpha=alpha;const g=ctx.createRadialGradient(x-rad*.3,y-rad*.35,rad*.1,x,y,rad);if(color===BLACK){g.addColorStop(0,'#4a5350');g.addColorStop(1,'#0d1110')}else{g.addColorStop(0,'#fff');g.addColorStop(1,'#bcb4a3')}ctx.beginPath();ctx.arc(x,y,rad,0,Math.PI*2);ctx.fillStyle=g;ctx.fill();ctx.restore()}
+  function draw(){if(!game||!geom.px)return;const n=game.size,s=geom.px;ctx.clearRect(0,0,s,s);ctx.fillStyle=css('--field');roundRect(0,0,s,s,10);ctx.fill();ctx.strokeStyle=css('--line');ctx.lineWidth=1;ctx.beginPath();for(let i=0;i<n;i++){const [x0,y]=xy(i,0),[x1]=xy(i,n-1),[x,y0]=xy(0,i),[,y1]=xy(n-1,i);ctx.moveTo(x0,y);ctx.lineTo(x1,y);ctx.moveTo(x,y0);ctx.lineTo(x,y1)}ctx.stroke();for(let r=0;r<n;r++)for(let c=0;c<n;c++){const v=game.at(r,c);if(v!==EMPTY)drawStone(r,c,v)}ctx.strokeStyle=css('--accent');ctx.lineWidth=1.7;for(const [r,c] of game.lastPlaced){const [x,y]=xy(r,c);ctx.beginPath();ctx.arc(x,y,radius()*.42,0,Math.PI*2);ctx.stroke()}if(game.winningLine){ctx.lineWidth=2.4;for(const [r,c] of game.winningLine){const [x,y]=xy(r,c);ctx.beginPath();ctx.arc(x,y,radius()*1.12,0,Math.PI*2);ctx.stroke()}}if(mode==='self'&&recommendation&&recommendation!=='end'&&!game.isOver){const [x,y]=xy(recommendation[0],recommendation[1]);ctx.save();ctx.strokeStyle=css('--brass');ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.beginPath();ctx.arc(x,y,radius()*1.22,0,Math.PI*2);ctx.stroke();ctx.restore()}const p=hover||cursor;if(p&&canUserAct()&&game.at(p[0],p[1])===EMPTY&&game.canPlace())drawStone(p[0],p[1],game.current,.4);if(cursor){const[x,y]=xy(cursor[0],cursor[1]);ctx.strokeStyle=css('--accent');ctx.strokeRect(x-geom.cell*.5,y-geom.cell*.5,geom.cell,geom.cell)}}
+  function resize(){const wrap=canvas.parentElement,st=getComputedStyle(wrap);const w=wrap.clientWidth-parseFloat(st.paddingLeft)-parseFloat(st.paddingRight),h=wrap.clientHeight-parseFloat(st.paddingTop)-parseFloat(st.paddingBottom);const size=Math.max(matchMedia('(max-width:820px) and (orientation:portrait)').matches?160:200,Math.floor(Math.min(w,h)));const dpr=devicePixelRatio||1;canvas.style.width=size+'px';canvas.style.height=size+'px';canvas.width=Math.round(size*dpr);canvas.height=Math.round(size*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);geom.pad=Math.max(14,size*.035);geom.cell=(size-geom.pad*2)/(game.size-1);geom.px=size;draw()}
+  function canUserAct(){return !busy&&!game.isOver&&(mode==='self'||game.current===humanColor)}
+  function bank(node,color){node.textContent='';const who=document.createElement('span');who.className='who';who.textContent=name[color];node.appendChild(who);for(let i=0;i<Math.min(game.stones[color],8);i++){const t=document.createElement('span');t.className='token '+(color===BLACK?'b':'w');node.appendChild(t)}const c=document.createElement('span');c.className='count';c.textContent=game.stones[color]+'개';node.appendChild(c)}
+  function render(){draw();$('turn-dot').style.background=game.current===BLACK?'radial-gradient(circle at 34% 30%,#4a5350,#0d1110 70%)':'radial-gradient(circle at 34% 30%,#fff,#bdb5a4 72%)';$('turn-text').textContent=game.isOver?'대국 종료':`${name[game.current]} 차례${mode==='ai'?(game.current===humanColor?' — 내 턴':' — AI 턴'):''}`;bank($('bank-black'),BLACK);bank($('bank-white'),WHITE);const slots=$('slots');slots.textContent='';for(let i=0;i<game.config.maxPlacesPerTurn;i++){const s=document.createElement('span');s.className='slot'+(i<game.placedThisTurn?' on':'')+(i>=game.placedThisTurn+game.stones[game.current]?' lock':'');slots.appendChild(s)}$('end-turn').disabled=!canUserAct();$('undo').disabled=!canUserAct()||!turnStart||game.placedThisTurn===0;$('side').disabled=mode==='self';$('recommend').hidden=mode!=='self';if(mode==='self')$('recommend').innerHTML=recommendationText||'<strong>추천</strong> 모델 계산 중…';$('log').innerHTML=logs.slice(-45).join('<br>');$('log').scrollTop=$('log').scrollHeight;updateBadge();if(game.isOver)showResult()}
+  function updateBadge(){const b=$('ai-badge');const s=window.MODEL_STATUS;if(s==='ready'){b.textContent='학습 모델';b.className='badge ready'}else if(s==='failed'){b.textContent='모델 실패';b.className='badge error';b.title=window.MODEL_STATUS_DETAIL||''}else{b.textContent='모델 불러오는 중';b.className='badge'}}
+  function hint(){if(game.isOver)return $('hint').textContent='';if(!canUserAct())return $('hint').textContent='AI가 생각하는 중입니다.';if(!game.canPlace())return $('hint').textContent='더 둘 수 없습니다. 턴을 마치세요.';$('hint').textContent=mode==='self'?'흑과 백을 모두 직접 둡니다. 점선 원은 모델의 현재 추천수입니다.':'이번 턴의 돌을 배치하거나 턴을 마치세요.'}
+  async function refreshRecommendation(){recommendation=null;recommendationText='';const seq=++recommendationSeq;if(mode!=='self'||!game||game.isOver){render();return}if(window.MODEL_STATUS!=='ready'||typeof window.MODEL_PLAN_TURN!=='function'){recommendationText='<strong>추천</strong> 모델 준비 중…';render();return}const stamp=`${game.current}|${game.placedThisTurn}|${game.stonesOnBoard}|${game.history.length}`;recommendationText='<strong>추천</strong> 계산 중…';render();try{const moves=await window.MODEL_PLAN_TURN(game.clone());if(seq!==recommendationSeq||mode!=='self')return;const now=`${game.current}|${game.placedThisTurn}|${game.stonesOnBoard}|${game.history.length}`;if(now!==stamp)return refreshRecommendation();if(moves&&moves.length){recommendation=moves[0];recommendationText=`<strong>추천</strong> ${recommendation[0]+1}·${recommendation[1]+1}`;}else{recommendation='end';recommendationText='<strong>추천</strong> 턴 마치기';}}catch(err){recommendationText='<strong>추천</strong> 계산 실패';console.warn(err)}render()}
+  function showResult(){if(resultShown)return;resultShown=true;$('result-title').textContent=game.winner?`${name[game.winner]} 승리`:'무승부';$('result-detail').textContent=game.winner?'여섯 개를 이었습니다.':`판의 70%가 채워졌습니다. (${game.stonesOnBoard}개)`;setTimeout(()=>{$('result').hidden=false},reduceMotion?0:500)}
+  function point(e){const rect=canvas.getBoundingClientRect(),x=e.clientX-rect.left,y=e.clientY-rect.top,c=Math.round((x-geom.pad)/geom.cell),r=Math.round((y-geom.pad)/geom.cell);if(!game.inside(r,c))return null;const[px,py]=xy(r,c);return Math.hypot(px-x,py-y)<=geom.cell*(finePointer?.55:.72)?[r,c]:null}
+  function isTurnStone(r,c){return canUserAct()&&game.lastPlaced.some(([rr,cc])=>rr===r&&cc===c)}
+  function reclaim(r,c){if(!turnStart||!isTurnStone(r,c))return;const keep=game.lastPlaced.filter(([rr,cc])=>rr!==r||cc!==c).map(x=>[...x]);game.restore(turnStart);for(const [rr,cc] of keep)game.place(rr,cc);hint();render();refreshRecommendation()}
+  function place(r,c){if(!canUserAct())return;if(isTurnStone(r,c))return reclaim(r,c);if(!game.canPlace())return;try{game.place(r,c)}catch(e){$('hint').textContent=e.message;return}if(game.isOver){logTurn(game.current,game.lastPlaced);finishLog()}hint();render();refreshRecommendation()}
+  function logTurn(color,moves){const where=moves.length?moves.map(([r,c])=>`${r+1}·${c+1}`).join('  '):'쉼';logs.push(`<b>${name[color]}</b> ${where}`)}function finishLog(){logs.push(game.winner?`— ${name[game.winner]} 승리`:'— 무승부')}
+  async function runAi(){if(mode!=='ai'||game.isOver||game.current===humanColor){afterTurn();return}busy=true;render();await new Promise(r=>setTimeout(r,reduceMotion?0:220));let moves=[];try{moves=typeof window.MODEL_PLAN_TURN==='function'?await window.MODEL_PLAN_TURN(game):planTurn(game,window.AI_LEVEL())}catch(e){console.warn(e);moves=planTurn(game,window.AI_LEVEL())}const color=game.current,placed=[];for(const [r,c] of moves){if(!game.canPlace())break;game.place(r,c);placed.push([r,c]);render();if(game.isOver)break;await new Promise(r=>setTimeout(r,reduceMotion?0:140))}logTurn(color,placed);if(!game.isOver)game.endTurn();else finishLog();busy=false;afterTurn()}
+  function afterTurn(){turnStart=game.isOver?null:game.snapshot();hint();render();refreshRecommendation()}
+  function endTurn(){if(!canUserAct())return;const color=game.current;logTurn(color,game.lastPlaced);game.endTurn();turnStart=game.snapshot();hint();render();if(mode==='ai')runAi();else refreshRecommendation()}
+  function newGame(){mode=$('mode').value;humanColor=parseInt($('side').value,10);game=new SixMok({boardSize:19});busy=false;turnStart=game.snapshot();hover=cursor=null;logs=[];resultShown=false;recommendation=null;recommendationText='';recommendationSeq++;$('result').hidden=true;resize();hint();render();if(mode==='ai'&&game.current!==humanColor)runAi();else refreshRecommendation()}
+  canvas.addEventListener('click',e=>{const p=point(e);if(p)place(p[0],p[1])});if(finePointer){canvas.addEventListener('mousemove',e=>{hover=point(e);draw()});canvas.addEventListener('mouseleave',()=>{hover=null;draw()})}canvas.addEventListener('keydown',e=>{const n=game.size;if(!cursor)cursor=[Math.floor(n/2),Math.floor(n/2)];const d={ArrowUp:[-1,0],ArrowDown:[1,0],ArrowLeft:[0,-1],ArrowRight:[0,1]}[e.key];if(d){cursor=[Math.max(0,Math.min(n-1,cursor[0]+d[0])),Math.max(0,Math.min(n-1,cursor[1]+d[1]))];e.preventDefault();draw()}else if(e.key==='Enter'||e.key===' '){e.preventDefault();place(cursor[0],cursor[1])}})
+  $('end-turn').addEventListener('click',endTurn);$('undo').addEventListener('click',()=>{if(!turnStart||!canUserAct())return;game.restore(turnStart);hint();render();refreshRecommendation()});$('new-game').addEventListener('click',newGame);$('result-new').addEventListener('click',newGame);$('side').addEventListener('change',newGame);$('mode').addEventListener('change',newGame);$('level').addEventListener('change',()=>{hint();refreshRecommendation()});window.addEventListener('model-status',()=>{updateBadge();refreshRecommendation()});window.addEventListener('resize',resize);
+  if(new URLSearchParams(location.search).get('mode')==='self')$('mode').value='self';newGame();
+})();
+</script>
+</body>
+</html>
