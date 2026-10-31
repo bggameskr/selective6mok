@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>육목 — 자율대국</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="play.css?v=2">
+</head>
+<body data-mode="self">
+<header class="topbar">
+  <a class="nav" href="index.html">← 메인</a>
+  <span class="brand">육목</span><span class="tag">자율대국 · 모델 추천수</span>
+  <div class="controls">
+    <span id="ai-badge" class="badge">모델 불러오는 중</span>
+    <select id="level" aria-label="추천 난이도"><option value="easy">쉬움 추천</option><option value="normal" selected>보통 추천</option><option value="hard">어려움 추천</option></select>
+    <button id="new-game">새 판</button>
+  </div>
+</header>
+<main class="stage">
+  <div class="board-wrap">
+    <canvas id="board" tabindex="0" aria-label="육목 자율대국 게임판"></canvas>
+    <div class="result" id="result" hidden><div class="result-card"><h2 id="result-title"></h2><p id="result-detail"></p><button class="primary" id="result-new">새 판</button></div></div>
+  </div>
+  <aside class="rail">
+    <div><p class="label">차례</p><div class="turn"><span id="turn-dot" class="dot"></span><span id="turn-text"></span></div></div>
+    <div class="bank-grid"><div><p class="label">돌 창고</p><div id="bank-black" class="bankline"></div><div id="bank-white" class="bankline"></div></div><div><p class="label">이번 턴</p><div id="slots" class="slots"></div></div></div>
+    <div id="recommend" class="recommend"></div>
+    <div class="actions"><button id="undo">무르기</button><button class="primary" id="end-turn">턴 마치기</button></div>
+    <p id="hint" class="hint"></p>
+    <div id="log" class="log" aria-live="polite"></div>
+  </aside>
+</main>
+<script src="engine.js?v=start-stones-1-2"></script>
+<script>window.AI_LEVEL = () => AI_LEVELS[document.getElementById('level')?.value || 'normal'] || AI_LEVELS.normal;</script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+<script src="model.js?v=opening35"></script>
+<script src="play.js?v=2"></script>
+</body>
+</html>
