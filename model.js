@@ -1,22 +1,22 @@
 /* 학습한 모델을 브라우저 게임에 붙인다.
 
-   모든 난이도는 전술 필수 후보를 보존한 1-ply policy×value 평가를 공통으로 쓴다.
-   난이도 차이는 후보 폭, temperature, 가중치 컷오프로 조절한다.
+   모든 난이도는 강제승/필수방어를 보존한 1-ply policy×value 평가를 공통으로 쓴다.
+   일반 상황에서는 후보 개수를 제한하지 않고 모든 합법 행동을 평가한다.
+   난이도 차이는 temperature와 가중치 컷오프로만 조절한다.
    빈 판 첫 착수는 T=1.5, 초반 10수는 기본 T×1.5를 적용한다.
    빈 판을 제외하면 난이도별 기준보다 낮은 P×V 가중치 후보는 샘플링에서 제외한다.
 
    13평면(v5.10+)과 구형 16평면 ONNX를 모두 지원한다.
-   v6.1.3 배포 정합성:
+   v6.2 배포 정합성:
      - 3번째 착수/보유돌 소진 child는 강제 END_TURN 뒤 상태로 value를 평가한다.
      - 0착수 자발 END_TURN만 보유돌 LUT로 감쇠한다. */
 
 (() => {
   'use strict';
 
-  const MODEL_URL = 'sixmok.onnx?v=6.1.3-1';
+  const MODEL_URL = 'sixmok.onnx?v=6.2-full-candidates-1';
   const MODEL_BOARD_SIZE = 19;
   const VALUE_WEIGHT_FLOOR = 1e-6;
-  const DEFAULT_LOOKAHEAD = 5;
   const DEFAULT_WEIGHT_CUTOFF_REL = 0.05;
   const OPENING_TEMPERATURE = 1.5;
   const EARLY_ACTIONS = 10;
@@ -347,7 +347,7 @@
     });
   }
 
-  function candidateActions(game, probs, width) {
+  function candidateActions(game, probs, _width) {
     const n = game.size;
     const endIndex = n * n;
     if (!game.canPlace()) return [endIndex];
@@ -367,34 +367,17 @@
       return forced.sort((a, b) => probs[b] - probs[a]);
     }
 
-    const foeThreat = threatGrids(game, foe);
-    const ownThreat = threatGrids(game, game.current);
-    const foeForks = [];
-    const ownForks = [];
-    for (const i of empties) {
-      if (foeThreat.forks3[i] >= 2) foeForks.push(i);
-      if (ownThreat.forks3[i] >= 2) ownForks.push(i);
-    }
-
-    if (foeForks.length || ownForks.length) {
-      const tactical = new Set([...foeForks, ...ownForks]);
-      const policyAllowance = Math.max(2, Math.floor(width / 2));
-      for (const a of empties.slice(0, policyAllowance)) tactical.add(a);
-      return [...tactical].sort((a, b) => probs[b] - probs[a]);
-    }
-
-    const chosen = new Set(empties.slice(0, width));
-    chosen.add(endIndex);
-    return [...chosen].sort((a, b) => {
+    const all = [...empties, endIndex];
+    return all.sort((a, b) => {
       if (a === endIndex) return 1;
       if (b === endIndex) return -1;
       return probs[b] - probs[a];
     });
   }
 
-  async function pickWithLookahead(game, probs, width, evaluateFn, temperature = 0, rng = Math.random, cutoffRel = DEFAULT_WEIGHT_CUTOFF_REL) {
+  async function pickWithLookahead(game, probs, _width, evaluateFn, temperature = 0, rng = Math.random, cutoffRel = DEFAULT_WEIGHT_CUTOFF_REL) {
     const rootColor = game.current;
-    const actions = candidateActions(game, probs, width);
+    const actions = candidateActions(game, probs, _width);
     const children = actions.map((action) => playEvaluationAction(game, action));
 
     const scores = new Array(actions.length);
@@ -437,7 +420,6 @@
     const n = game.size;
     const endIndex = n * n;
     const baseTemperature = Number.isFinite(level.temperature) ? level.temperature : 0.5;
-    const width = Number.isFinite(level.lookahead) ? Math.max(1, Math.floor(level.lookahead)) : DEFAULT_LOOKAHEAD;
     const cutoffRel = Number.isFinite(level.cutoffRel) ? level.cutoffRel : DEFAULT_WEIGHT_CUTOFF_REL;
     const rng = options.rng || Math.random;
     const sim = game.clone();
@@ -456,7 +438,7 @@
       const probs = legalProbs(policy, sim, 0, stride);
       const temperature = effectiveTemperature(sim, baseTemperature);
       const index = await pickWithLookahead(
-        sim, probs, width, evaluateFn, temperature, rng, cutoffRel,
+        sim, probs, null, evaluateFn, temperature, rng, cutoffRel,
       );
 
       if (index === endIndex || index < 0) break;
