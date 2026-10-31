@@ -12,7 +12,6 @@
   let turnStart = null;
   let hover = null;
   let cursor = null;
-  let logs = [];
   let resultShown = false;
   let geom = { pad: 0, cell: 0, px: 0 };
   let recommendation = null;
@@ -71,6 +70,11 @@
     ctx.fillStyle = grad;
     ctx.fill();
     ctx.restore();
+  }
+
+  function canUserAct() {
+    const g = shownGame();
+    return !!g && !g.isOver;
   }
 
   function draw() {
@@ -166,10 +170,6 @@
     draw();
   }
 
-  function canUserAct() {
-    return !!game && isLatest() && !game.isOver;
-  }
-
   function renderBank(node, color, g) {
     node.textContent = '';
     const who = document.createElement('span');
@@ -202,6 +202,29 @@
     }
   }
 
+  function historyLogHtml() {
+    if (!game || !game.history.length) return '';
+    const lines = [];
+    let currentColor = null;
+    let placements = [];
+    for (const [color, move] of game.history) {
+      if (currentColor === null) currentColor = color;
+      if (move === END_TURN) {
+        const where = placements.length ? placements.join('  ') : '쉼';
+        lines.push(`<b>${colorName[color]}</b> ${where}`);
+        currentColor = null;
+        placements = [];
+      } else {
+        placements.push(`${move[0] + 1}·${move[1] + 1}`);
+      }
+    }
+    if (placements.length && currentColor !== null) {
+      lines.push(`<b>${colorName[currentColor]}</b> ${placements.join('  ')} <span class="partial">(진행 중)</span>`);
+    }
+    if (game.isOver) lines.push(game.winner ? `— ${colorName[game.winner]} 승리` : '— 무승부');
+    return lines.slice(-45).join('<br>');
+  }
+
   function render() {
     const g = shownGame();
     draw();
@@ -210,7 +233,7 @@
       : 'radial-gradient(circle at 34% 30%,#fff,#bdb5a4 72%)';
     $('turn-text').textContent = g.isOver
       ? '대국 종료'
-      : `${colorName[g.current]} 차례${isLatest() ? '' : ' — 기보 탐색 중'}`;
+      : `${colorName[g.current]} 차례${isLatest() ? '' : ' — 과거 국면'}`;
     renderBank($('bank-black'), BLACK, g);
     renderBank($('bank-white'), WHITE, g);
 
@@ -225,9 +248,9 @@
     }
 
     $('end-turn').disabled = !canUserAct();
-    $('undo').disabled = !canUserAct() || !turnStart || game.placedThisTurn === 0;
+    $('undo').disabled = !canUserAct() || g.placedThisTurn === 0;
     $('recommend').innerHTML = recommendationText || '<strong>Greedy</strong> 모델 계산 중…';
-    $('log').innerHTML = logs.slice(-45).join('<br>');
+    $('log').innerHTML = historyLogHtml();
     $('log').scrollTop = $('log').scrollHeight;
     updateBadge();
 
@@ -238,7 +261,7 @@
   function setHint() {
     const g = shownGame();
     if (!isLatest()) {
-      $('hint').innerHTML = '<span class="reviewing-note">기보 탐색 중입니다. 최신 수로 이동하면 다시 둘 수 있습니다.</span>';
+      $('hint').innerHTML = '<span class="reviewing-note">과거 국면입니다. 여기서 새 수를 두면 이후 기보는 폐기되고 이 수부터 새 기보가 됩니다.</span>';
       return;
     }
     if (g.isOver) return $('hint').textContent = '';
@@ -277,6 +300,34 @@
     reviewIndex = reviewEntries.length - 1;
     reviewView = null;
     dispatchReview();
+  }
+
+  function computeTurnStart() {
+    const replay = new SixMok(game.config);
+    let start = replay.snapshot();
+    for (const [, move] of game.history) {
+      replay.play(move);
+      if (move === END_TURN) start = replay.snapshot();
+    }
+    return start;
+  }
+
+  function adoptReviewBranch() {
+    if (isLatest()) return false;
+    const snapshot = reviewEntries[reviewIndex]?.snapshot;
+    if (!snapshot) return false;
+    game.restore(snapshot);
+    reviewEntries = reviewEntries.slice(0, reviewIndex + 1);
+    reviewIndex = reviewEntries.length - 1;
+    reviewView = null;
+    turnStart = computeTurnStart();
+    resultShown = false;
+    $('result').hidden = true;
+    recommendationSeq += 1;
+    recommendation = null;
+    recommendationText = '';
+    dispatchReview();
+    return true;
   }
 
   function setReviewIndex(index) {
@@ -367,7 +418,7 @@
   }
 
   function isCurrentTurnStone(r, c) {
-    return canUserAct() && game.lastPlaced.some(([rr, cc]) => rr === r && cc === c);
+    return game.lastPlaced.some(([rr, cc]) => rr === r && cc === c);
   }
 
   function reclaim(r, c) {
@@ -385,8 +436,10 @@
 
   function place(r, c) {
     if (!canUserAct()) return;
+    if (!isLatest()) adoptReviewBranch();
     if (isCurrentTurnStone(r, c)) return reclaim(r, c);
     if (!game.canPlace()) return;
+    if (game.at(r, c) !== EMPTY) return;
     try {
       game.place(r, c);
     } catch (err) {
@@ -394,30 +447,28 @@
       return;
     }
     rebuildReview();
-    if (game.isOver) {
-      logTurn(game.current, game.lastPlaced);
-      finishLog();
-    }
     setHint();
     render();
     refreshRecommendation();
   }
 
-  function logTurn(color, moves) {
-    const where = moves.length ? moves.map(([r, c]) => `${r + 1}·${c + 1}`).join('  ') : '쉼';
-    logs.push(`<b>${colorName[color]}</b> ${where}`);
-  }
-
-  function finishLog() {
-    logs.push(game.winner ? `— ${colorName[game.winner]} 승리` : '— 무승부');
-  }
-
   function endTurn() {
     if (!canUserAct()) return;
-    const color = game.current;
-    logTurn(color, game.lastPlaced);
+    if (!isLatest()) adoptReviewBranch();
     game.endTurn();
     turnStart = game.snapshot();
+    rebuildReview();
+    setHint();
+    render();
+    refreshRecommendation();
+  }
+
+  function undoTurn() {
+    if (!canUserAct()) return;
+    if (!isLatest()) adoptReviewBranch();
+    if (game.placedThisTurn === 0) return;
+    turnStart = computeTurnStart();
+    game.restore(turnStart);
     rebuildReview();
     setHint();
     render();
@@ -429,7 +480,6 @@
     turnStart = game.snapshot();
     hover = null;
     cursor = null;
-    logs = [];
     resultShown = false;
     recommendation = null;
     recommendationText = '';
@@ -472,14 +522,7 @@
   });
 
   $('end-turn').addEventListener('click', endTurn);
-  $('undo').addEventListener('click', () => {
-    if (!turnStart || !canUserAct()) return;
-    game.restore(turnStart);
-    rebuildReview();
-    setHint();
-    render();
-    refreshRecommendation();
-  });
+  $('undo').addEventListener('click', undoTurn);
   $('new-game').addEventListener('click', newGame);
   $('result-new').addEventListener('click', newGame);
   window.addEventListener('model-status', () => { updateBadge(); refreshRecommendation(); });
