@@ -32,25 +32,28 @@
 
     const moves = [];
     for (let i = lastEnd - 1; i >= 0; i--) {
-      const move = game.history[i]?.[1];
+      const [color, move] = game.history[i] || [];
       if (move === END_TURN) break;
-      if (Array.isArray(move) && move.length === 2) moves.push([...move]);
+      if (Array.isArray(move) && move.length === 2) moves.push({ color, move:[...move] });
     }
     moves.reverse();
     return moves;
+  }
+
+  function kifuItemMoves(item) {
+    if (!item) return [];
+    return (item.moves || []).map((move) => ({ color:item.color, move:[...move] }));
   }
 
   function previousTurnFromKifu() {
     if (!latestKifu || latestKifu.index <= 0) return [];
     const items = latestKifu.items || [];
     const active = items.find((item) => item.positionIndex === latestKifu.index);
-    if (active?.complete) return (active.moves || []).map((move) => [...move]);
+    if (active?.complete) return kifuItemMoves(active);
 
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i];
-      if (item.positionIndex < latestKifu.index && item.complete) {
-        return (item.moves || []).map((move) => [...move]);
-      }
+      if (item.positionIndex < latestKifu.index && item.complete) return kifuItemMoves(item);
     }
     return [];
   }
@@ -77,9 +80,10 @@
     const layer = ensureLayer(geom.wrap);
     layer.textContent = '';
 
-    for (const [r, c] of previousTurnMoves()) {
+    for (const { color, move } of previousTurnMoves()) {
+      const [r, c] = move;
       const marker = document.createElement('span');
-      marker.className = 'previous-turn-marker';
+      marker.className = `previous-turn-marker ${color === BLACK ? 'black' : 'white'}`;
       marker.style.left = `${geom.canvasRect.left - geom.wrapRect.left + geom.pad + c * geom.cell}px`;
       marker.style.top = `${geom.canvasRect.top - geom.wrapRect.top + geom.pad + r * geom.cell}px`;
       marker.style.width = `${Math.max(14, geom.cell * 0.66)}px`;
