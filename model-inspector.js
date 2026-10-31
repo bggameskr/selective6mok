@@ -137,7 +137,7 @@
       candidateCount:scored.length, childEvaluatedCount:inferredChildren, decisionPath,
       policyCutoffRel:game.stonesOnBoard === 0 ? OPENING_POLICY_CUTOFF_REL : DEFAULT_POLICY_CUTOFF_REL,
       greedyMove:greedy.action === endIndex ? END_TURN : [Math.floor(greedy.action/n), greedy.action%n], greedy,
-      candidates:needsChildValue ? scored : [],
+      candidates:scored,
     };
   }
 
