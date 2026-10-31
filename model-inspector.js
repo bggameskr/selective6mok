@@ -2,7 +2,7 @@
   'use strict';
 
   const CORE = window.SIXMOK_MODEL_CORE;
-  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening35-t1-inspector-greedy';
+  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening35-inspector-v4';
   const MODEL_BOARD_SIZE = 19;
   const DEFAULT_POLICY_CUTOFF_REL = 0.20;
   const OPENING_POLICY_CUTOFF_REL = 0.35;
@@ -105,6 +105,14 @@
     return action === n * n ? 'END_TURN' : `${Math.floor(action / n) + 1}·${action % n + 1}`;
   }
 
+  function reasonFor(game, action, immediateWin) {
+    const endIndex = game.size * game.size;
+    if (action === endIndex) return 'END_TURN';
+    if (action === immediateWin) return '즉시승 강제수';
+    if (game.stonesOnBoard === 0) return '오프닝 policy 35% 통과';
+    return '실제 후보 필터 통과';
+  }
+
   async function analyzeUncached(game) {
     if (game.size !== MODEL_BOARD_SIZE) throw new Error(`모델은 ${MODEL_BOARD_SIZE}줄 판만 지원합니다.`);
 
@@ -178,20 +186,31 @@
       const childValue = childValues.has(action) ? Number(childValues.get(action)) : null;
       const winProb = childValue === null ? null : CORE.valueWinProb(childValue);
       const pv = childValue === null ? null : CORE.policyValueWeight(policy, childValue);
-      const selectionWeight = game.stonesOnBoard === 0
+      const score = game.stonesOnBoard === 0
         ? policy * modifier
         : (childValue === null ? policy * modifier : pv * modifier);
-      return { action, policy, modifier, childValue, winProb, pv, selectionWeight };
+      return {
+        action,
+        label: actionLabel(action, n),
+        rawLogit: Number(logits[action]),
+        policy,
+        policyRank: policyRank.get(action) || null,
+        childValue,
+        winProb,
+        pv,
+        modifier,
+        score,
+        reason: reasonFor(game, action, immediateWin),
+      };
     });
 
-    scored.sort((a, b) => (b.selectionWeight - a.selectionWeight) || (a.action - b.action));
-    const greedy = scored[0] || { action: endIndex, policy: 0, modifier: 1, childValue: null, winProb: null, pv: null, selectionWeight: 0 };
-
-    let reason = 'policy 20% 후보 중 최고 P×V';
-    if (greedy.action === endIndex) reason = 'END_TURN';
-    if (game.stonesOnBoard === 0) reason = '오프닝 35% 후보 중 최고 policy';
-    if (immediateWin >= 0) reason = '즉시승 강제수';
-    if (!game.canPlace()) reason = '착수 불가';
+    scored.sort((a, b) => (b.score - a.score) || (a.action - b.action));
+    scored.forEach((row, i) => { row.candidateRank = i + 1; });
+    const greedy = scored[0] || {
+      action: endIndex, label: 'END_TURN', rawLogit: 0, policy: 0, policyRank: null,
+      childValue: null, winProb: null, pv: null, modifier: 1, score: 0,
+      reason: '착수 불가', candidateRank: 1,
+    };
 
     return {
       modelUrl: MODEL_URL,
@@ -199,24 +218,13 @@
       rootValue,
       rootWinProb: CORE.valueWinProb(rootValue),
       legalCount: legalActions.length,
-      candidateCount: candidates.length,
-      childEvaluatedCount: needsChildValue ? candidates.length : 0,
+      candidateCount: scored.length,
+      childEvaluatedCount: needsChildValue ? scored.length : 0,
       decisionPath,
       policyCutoffRel: game.stonesOnBoard === 0 ? OPENING_POLICY_CUTOFF_REL : DEFAULT_POLICY_CUTOFF_REL,
       greedyMove: greedy.action === endIndex ? END_TURN : [Math.floor(greedy.action / n), greedy.action % n],
-      greedy: {
-        action: greedy.action,
-        label: actionLabel(greedy.action, n),
-        rawLogit: Number(logits[greedy.action]),
-        policy: greedy.policy,
-        policyRank: policyRank.get(greedy.action) || null,
-        childValue: greedy.childValue,
-        winProb: greedy.winProb,
-        pv: greedy.pv,
-        modifier: greedy.modifier,
-        score: greedy.selectionWeight,
-        reason,
-      },
+      greedy,
+      candidates: scored,
     };
   }
 
