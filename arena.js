@@ -5,9 +5,9 @@
   const MAX_EMPTY_TURNS = 16;
   const MAX_TURNS = 512;
   const LEVELS = {
-    easy: { label: '쉬움', temperature: 1.2, lookahead: 8, cutoffRel: 0.02 },
-    normal: { label: '보통', temperature: 0.6, lookahead: 5, cutoffRel: 0.05 },
-    hard: { label: '어려움', temperature: 0.3, lookahead: 3, cutoffRel: 0.10 },
+    easy: { label: '쉬움', temperature: 1.2, cutoffRel: 0.02 },
+    normal: { label: '보통', temperature: 0.6, cutoffRel: 0.05 },
+    hard: { label: '어려움', temperature: 0.3, cutoffRel: 0.10 },
   };
 
   const core = window.SIXMOK_MODEL_CORE;
@@ -325,17 +325,15 @@
           file: modelA.fileName,
           difficulty: levelA.label,
           temperature: levelA.temperature,
-          lookahead: levelA.lookahead,
           cutoffRel: levelA.cutoffRel,
         },
         modelB: {
           file: modelB.fileName,
           difficulty: levelB.label,
           temperature: levelB.temperature,
-          lookahead: levelB.lookahead,
           cutoffRel: levelB.cutoffRel,
         },
-        environment: 'current-web-model.js',
+        environment: 'current-web-model.js-full-candidates',
         maxEmptyTurns: MAX_EMPTY_TURNS,
         maxTurns: MAX_TURNS,
       },
