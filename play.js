@@ -238,7 +238,7 @@
     const recommend = $('recommend');
     if (recommend) {
       recommend.hidden = !isSelfMode;
-      if (isSelfMode) recommend.innerHTML = recommendationText || '<strong>추천</strong> 모델 계산 중…';
+      if (isSelfMode) recommend.innerHTML = recommendationText || '<strong>Greedy</strong> 모델 계산 중…';
     }
 
     $('log').innerHTML = logs.slice(-45).join('<br>');
@@ -251,7 +251,7 @@
     if (game.isOver) return $('hint').textContent = '';
     if (!canUserAct()) return $('hint').textContent = 'AI가 생각하는 중입니다.';
     if (!game.canPlace()) return $('hint').textContent = '더 둘 수 없습니다. 턴을 마치세요.';
-    if (isSelfMode) return $('hint').textContent = '흑과 백을 모두 직접 둡니다. 점선 원은 모델의 현재 추천수입니다.';
+    if (isSelfMode) return $('hint').textContent = '흑과 백을 모두 직접 둡니다. 점선 원은 난수 없는 greedy 추천수입니다.';
     if (isPvpMode) return $('hint').textContent = '현재 차례의 플레이어가 돌을 두거나 턴을 마칩니다.';
     $('hint').textContent = '이번 턴의 돌을 배치하거나 턴을 마치세요.';
   }
@@ -265,13 +265,13 @@
       return;
     }
     if (window.MODEL_STATUS !== 'ready' || typeof window.MODEL_PLAN_TURN !== 'function') {
-      recommendationText = '<strong>추천</strong> 모델 준비 중…';
+      recommendationText = '<strong>Greedy</strong> 모델 준비 중…';
       render();
       return;
     }
 
     const stamp = `${game.current}|${game.placedThisTurn}|${game.stonesOnBoard}|${game.history.length}`;
-    recommendationText = '<strong>추천</strong> 계산 중…';
+    recommendationText = '<strong>Greedy</strong> 계산 중…';
     render();
     try {
       const moves = await window.MODEL_PLAN_TURN(game.clone());
@@ -280,13 +280,13 @@
       if (now !== stamp) return refreshRecommendation();
       if (moves && moves.length) {
         recommendation = moves[0];
-        recommendationText = `<strong>추천</strong> ${recommendation[0] + 1}·${recommendation[1] + 1}`;
+        recommendationText = `<strong>Greedy</strong> ${recommendation[0] + 1}·${recommendation[1] + 1}`;
       } else {
         recommendation = END_TURN;
-        recommendationText = '<strong>추천</strong> 턴 마치기';
+        recommendationText = '<strong>Greedy</strong> 턴 마치기';
       }
     } catch (err) {
-      recommendationText = '<strong>추천</strong> 계산 실패';
+      recommendationText = '<strong>Greedy</strong> 계산 실패';
       console.warn(err);
     }
     render();
