@@ -8,57 +8,38 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --ink:#101413; --panel:#151d1c; --panel2:#1a2321; --line:#2f403c;
-    --paper:#ede7da; --dim:#9aa6a1; --accent:#86b8a8; --brass:#c89b3c;
-    --display:'Gowun Batang',serif; --ui:'IBM Plex Sans KR',system-ui,sans-serif;
-    --mono:'IBM Plex Mono',ui-monospace,monospace;
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0;min-height:100%;background:var(--ink);color:var(--paper);font-family:var(--ui)}
-  body{min-height:100dvh;display:grid;place-items:center;padding:24px}
-  main{width:min(920px,100%)}
-  .eyebrow{font:500 11px var(--mono);letter-spacing:.16em;color:var(--accent);text-transform:uppercase;margin:0 0 14px}
-  h1{font:700 clamp(40px,8vw,76px)/1 var(--display);letter-spacing:.08em;margin:0}
-  .lead{max-width:620px;margin:18px 0 34px;color:var(--dim);font-size:15px;line-height:1.8}
-  .grid{display:grid;grid-template-columns:1.35fr 1fr;gap:14px}
-  .card{display:flex;flex-direction:column;min-height:250px;padding:24px;border:1px solid var(--line);border-radius:12px;background:var(--panel);text-decoration:none;color:inherit;transition:transform .15s ease,border-color .15s ease,background .15s ease}
-  .card:hover{transform:translateY(-2px);border-color:var(--accent);background:var(--panel2)}
-  .kicker{font:500 11px var(--mono);letter-spacing:.12em;color:var(--dim);text-transform:uppercase}
-  .card h2{font:700 27px var(--display);margin:12px 0 8px}
-  .card p{margin:0;color:var(--dim);font-size:13px;line-height:1.7}
-  .card .go{margin-top:auto;padding-top:28px;color:var(--accent);font-weight:600}
-  .modes{display:flex;gap:7px;flex-wrap:wrap;margin-top:16px}
-  .pill{font:500 11px var(--mono);padding:5px 8px;border:1px solid var(--line);border-radius:999px;color:var(--dim)}
-  .subaction{display:inline-flex;margin-top:12px;color:var(--brass);font-size:12px;text-decoration:none}
-  footer{margin-top:22px;color:var(--dim);font:11px var(--mono)}
-  @media(max-width:700px){body{padding:18px}.grid{grid-template-columns:1fr}.card{min-height:210px}h1{font-size:50px}}
+:root{--ink:#101413;--panel:#151d1c;--panel2:#1a2321;--line:#2f403c;--paper:#ede7da;--dim:#9aa6a1;--accent:#86b8a8;--brass:#c89b3c;--display:'Gowun Batang',serif;--ui:'IBM Plex Sans KR',system-ui,sans-serif;--mono:'IBM Plex Mono',ui-monospace,monospace}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--ink);color:var(--paper);font-family:var(--ui)}body{min-height:100dvh;display:grid;place-items:center;padding:24px}main{width:min(920px,100%)}
+.eyebrow{font:500 11px var(--mono);letter-spacing:.16em;color:var(--accent);text-transform:uppercase;margin:0 0 14px}h1{font:700 clamp(40px,8vw,76px)/1 var(--display);letter-spacing:.08em;margin:0}.lead{max-width:620px;margin:18px 0 34px;color:var(--dim);font-size:15px;line-height:1.8}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.card{display:flex;flex-direction:column;min-height:245px;padding:24px;border:1px solid var(--line);border-radius:12px;background:var(--panel);text-decoration:none;color:inherit;transition:transform .15s ease,border-color .15s ease,background .15s ease}.card:hover{transform:translateY(-2px);border-color:var(--accent);background:var(--panel2)}.kicker{font:500 11px var(--mono);letter-spacing:.12em;color:var(--dim);text-transform:uppercase}.card h2{font:700 28px var(--display);margin:12px 0 8px}.card p{margin:0;color:var(--dim);font-size:13px;line-height:1.7}.go{margin-top:auto;padding-top:28px;color:var(--accent);font-weight:600}
+.dev{margin-top:16px;padding:13px 15px;border:1px solid var(--line);border-radius:9px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}.dev-title{font:500 10px var(--mono);letter-spacing:.14em;color:var(--dim);text-transform:uppercase;margin-right:auto}.dev a{font-size:12px;color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px}.dev a:hover{color:var(--brass);background:var(--panel)}footer{margin-top:18px;color:var(--dim);font:11px var(--mono)}
+@media(max-width:700px){body{padding:18px}.grid{grid-template-columns:1fr}.card{min-height:195px}h1{font-size:50px}.dev{align-items:flex-start}.dev-title{width:100%;margin-right:0}}
 </style>
 </head>
 <body>
 <main>
   <p class="eyebrow">Selective Six</p>
   <h1>육목</h1>
-  <p class="lead">돌을 모으고, 한 턴에 최대 세 개까지 놓아 여섯 개를 잇는 게임입니다. 사람과 모델의 대국부터 자유 실험, 모델 간 아레나까지 한곳에서 시작합니다.</p>
-
-  <section class="grid" aria-label="메뉴">
+  <p class="lead">돌을 모아 한 턴에 최대 세 개까지 놓고, 먼저 여섯 개를 잇는 쪽이 이깁니다.</p>
+  <section class="grid" aria-label="게임 모드">
     <a class="card" href="game.html">
-      <span class="kicker">Play</span>
-      <h2>게임</h2>
-      <p>모델과 직접 대국하거나, 자율 대국에서 흑과 백을 번갈아 두며 모델 추천수를 확인합니다.</p>
-      <div class="modes"><span class="pill">AI 대국</span><span class="pill">자율 대국 + 추천수</span></div>
-      <span class="go">게임 화면으로 →</span>
+      <span class="kicker">VS AI</span>
+      <h2>AI와 대국</h2>
+      <p>학습 모델을 상대로 난이도와 색을 선택해 대국합니다.</p>
+      <span class="go">대국 시작 →</span>
     </a>
-
-    <a class="card" href="arena.html">
-      <span class="kicker">Arena</span>
-      <h2>모델 아레나</h2>
-      <p>두 ONNX 모델을 같은 웹 정책으로 대국시켜 성능과 색별 결과를 비교합니다.</p>
-      <span class="go">아레나로 →</span>
+    <a class="card" href="pvp.html">
+      <span class="kicker">PVP</span>
+      <h2>PVP</h2>
+      <p>한 기기에서 두 사람이 흑과 백을 맡아 번갈아 대국합니다.</p>
+      <span class="go">PVP 시작 →</span>
     </a>
   </section>
-
-  <a class="subaction" href="game.html?mode=self">자율 대국 바로 열기 →</a>
+  <nav class="dev" aria-label="개발자 옵션">
+    <span class="dev-title">개발자 옵션</span>
+    <a href="selfplay.html">자율대국 · 모델 추천수</a>
+    <a href="arena.html">모델 아레나</a>
+  </nav>
   <footer>19 × 19 · 6 in a row · up to 3 stones per turn</footer>
 </main>
 </body>
