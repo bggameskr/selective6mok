@@ -1,0 +1,34 @@
+body[data-mode="self"] .stage { grid-template-columns:minmax(420px,1fr) minmax(620px,46vw); }
+body[data-mode="self"] .rail { overflow:auto; gap:12px; }
+.analysis-head { display:flex; align-items:end; gap:10px; flex-wrap:wrap; border-top:1px solid var(--edge); padding-top:12px; }
+.analysis-head .label { margin:0; }
+.analysis-head .spacer { flex:1; }
+.analysis-head select { font:11px var(--mono); padding:5px 7px; }
+.analysis-meta,.analysis-count { color:var(--dim); font:10px/1.4 var(--mono); }
+.analysis-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+.metric { min-width:0; padding:9px 10px; border:1px solid var(--edge); border-radius:7px; background:var(--field); }
+.metric.hero { border-color:var(--brass); }
+.metric span,.metric small { display:block; color:var(--dim); font:10px/1.35 var(--mono); }
+.metric strong { display:block; margin:3px 0; font:600 15px/1.2 var(--mono); color:var(--paper); overflow-wrap:anywhere; }
+.metric.hero strong { color:var(--brass); }
+.analysis-table-wrap { overflow:auto; min-height:260px; max-height:52vh; border:1px solid var(--edge); border-radius:7px; }
+.analysis-table { width:100%; border-collapse:collapse; font:10px/1.35 var(--mono); min-width:1220px; }
+.analysis-table th,.analysis-table td { padding:7px 8px; border-bottom:1px solid var(--edge); text-align:right; white-space:nowrap; }
+.analysis-table th { position:sticky; top:0; z-index:1; background:var(--rail); color:var(--dim); font-weight:500; }
+.analysis-table th:nth-child(2),.analysis-table td:nth-child(2),.analysis-table th:nth-child(11),.analysis-table td:nth-child(11) { text-align:left; }
+.analysis-table tr.greedy-row { background:color-mix(in srgb,var(--brass) 10%,transparent); }
+.analysis-table tr.excluded-row { opacity:.55; }
+.greedy-mark { display:inline-block; margin-left:5px; padding:1px 4px; border:1px solid var(--brass); border-radius:4px; color:var(--brass); font-size:9px; }
+.analysis-table small { color:var(--dim); }
+.analysis-table td.temp.off { color:var(--dim); opacity:.45; }
+@media(max-width:1100px) {
+  body[data-mode="self"] { overflow:auto; height:auto; }
+  body[data-mode="self"] .stage { display:flex; flex-direction:column; overflow:visible; }
+  body[data-mode="self"] .board-wrap { min-height:min(72vh,720px); }
+  body[data-mode="self"] .rail { border-left:0; border-top:1px solid var(--edge); overflow:visible; }
+  .analysis-table-wrap { max-height:60vh; }
+}
+@media(max-width:700px) {
+  .analysis-summary { grid-template-columns:1fr 1fr; }
+  body[data-mode="self"] .board-wrap { min-height:55vh; }
+}
