@@ -40,6 +40,8 @@ body[data-mode="self"] .rail { overflow:auto; gap:12px; }
 .candidate-table tr.greedy-row { background:color-mix(in srgb,var(--brass) 10%,transparent); }
 .candidate-table tr.selected-row { outline:1px solid var(--accent); outline-offset:-1px; background:color-mix(in srgb,var(--accent) 12%,transparent); }
 .candidate-table small { color:var(--dim); }
+.previous-turn-markers { position:absolute; inset:0; z-index:5; pointer-events:none; }
+.previous-turn-marker { position:absolute; border:1.5px dashed color-mix(in srgb,var(--accent) 62%,var(--dim)); border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; opacity:.9; box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 14%,transparent); }
 .candidate-marker { position:absolute; z-index:6; border:2px solid var(--brass); border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; box-shadow:0 0 0 3px color-mix(in srgb,var(--brass) 18%,transparent); }
 .candidate-marker[hidden],.board-info-overlay[hidden] { display:none; }
 .board-info-overlay { position:absolute; z-index:8; pointer-events:none; transform:translate(14px,14px); min-width:160px; max-width:230px; padding:8px 9px; border:1px solid var(--edge); border-radius:7px; background:color-mix(in srgb,var(--rail) 94%,transparent); box-shadow:0 6px 20px rgba(0,0,0,.28); font:10px/1.45 var(--mono); color:var(--paper); }
