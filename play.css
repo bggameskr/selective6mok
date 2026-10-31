@@ -25,7 +25,9 @@ button:disabled { opacity:.35; cursor:not-allowed; }
 .board-wrap { position:relative; display:grid; place-items:center; padding:16px; min-height:0; }
 canvas { display:block; max-width:100%; border-radius:10px; touch-action:manipulation; user-select:none; -webkit-user-select:none; }
 .previous-turn-markers { position:absolute; inset:0; z-index:5; pointer-events:none; }
-.previous-turn-marker { position:absolute; border:1.5px dashed color-mix(in srgb,var(--accent) 62%,var(--dim)); border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; opacity:.9; box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 14%,transparent); }
+.previous-turn-marker { position:absolute; border:2px dashed; border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; opacity:.98; }
+.previous-turn-marker.black { border-color:#79bfff; box-shadow:0 0 0 1px rgba(5,13,20,.95),0 0 8px rgba(121,191,255,.55); }
+.previous-turn-marker.white { border-color:#ffd06a; box-shadow:0 0 0 1px rgba(61,43,8,.92),0 0 8px rgba(255,208,106,.62); }
 .rail { background:var(--rail); border-left:1px solid var(--edge); padding:18px; display:flex; flex-direction:column; gap:16px; min-height:0; }
 .label { font:10px var(--mono); letter-spacing:.15em; color:var(--dim); text-transform:uppercase; margin:0 0 7px; }
 .turn { display:flex; align-items:center; gap:8px; }
