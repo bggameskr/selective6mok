@@ -1,48 +1,52 @@
-body[data-mode="self"] .stage { grid-template-columns:minmax(420px,1fr) minmax(660px,48vw); }
+body[data-mode="self"] .stage { grid-template-columns:minmax(420px,1fr) minmax(620px,48vw); }
 body[data-mode="self"] .rail { overflow:auto; gap:12px; }
-.rail-top { display:grid; grid-template-columns:minmax(150px,.72fr) minmax(300px,1.28fr); gap:10px; align-items:stretch; }
-.turn-panel,.kifu-top { min-width:0; padding:9px 10px; border:1px solid var(--edge); border-radius:8px; background:var(--field); }
-.turn-panel .label { margin-bottom:8px; }
-.kifu-head { display:flex; align-items:center; gap:8px; margin-bottom:7px; }
-.kifu-head .label { margin:0; }
-.review-nav { margin-left:auto; display:flex; align-items:center; gap:4px; }
-.review-nav button { padding:3px 6px; font:10px var(--mono); min-width:28px; }
-#kifu-pos { min-width:46px; text-align:center; color:var(--dim); font:10px var(--mono); }
-.kifu-list { display:flex; gap:4px; overflow-x:auto; padding-bottom:2px; scrollbar-width:thin; }
-.kifu-item { flex:0 0 auto; display:inline-flex; gap:4px; align-items:center; padding:4px 6px; font:10px var(--mono); border-color:var(--edge); white-space:nowrap; }
-.kifu-item.active { border-color:var(--brass); color:var(--brass); }
-.kifu-item.end { opacity:.68; }
-.kifu-no,.kifu-color,.kifu-empty { color:var(--dim); }
-.analysis-head { display:flex; align-items:center; gap:10px; border-top:1px solid var(--edge); padding-top:12px; }
+.self-upper { display:grid; grid-template-columns:minmax(260px,.95fr) minmax(300px,1.05fr); gap:12px; align-items:stretch; }
+.play-info { display:flex; flex-direction:column; gap:12px; min-width:0; }
+.kifu-panel { min-width:0; min-height:280px; display:flex; flex-direction:column; border:1px solid var(--edge); border-radius:8px; background:var(--field); overflow:hidden; }
+.kifu-head { display:flex; align-items:center; gap:8px; padding:9px 10px; border-bottom:1px solid var(--edge); }
+.kifu-head .label { margin:0 auto 0 0; }
+.review-nav { display:flex; align-items:center; gap:4px; }
+.review-nav button { font:10px var(--mono); min-width:30px; padding:4px 6px; }
+#kifu-pos { min-width:52px; text-align:center; font:10px var(--mono); color:var(--dim); }
+.kifu-list { flex:1; min-height:0; overflow:auto; padding:7px; display:flex; flex-direction:column; gap:5px; }
+.kifu-item { width:100%; display:grid; grid-template-columns:42px 26px minmax(0,1fr); align-items:start; gap:7px; text-align:left; padding:7px 8px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--paper); }
+.kifu-item:hover { border-color:var(--line); }
+.kifu-item.active { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 8%,transparent); }
+.kifu-turn { font:10px var(--mono); color:var(--dim); }
+.kifu-color { font:600 10px var(--mono); }
+.kifu-moves { min-width:0; display:flex; flex-direction:column; gap:2px; font:10px/1.45 var(--mono); }
+.kifu-moves strong { font-weight:500; color:var(--paper); overflow-wrap:anywhere; }
+.kifu-end { color:var(--dim); font-size:9px; }
+.kifu-empty { color:var(--dim); font:10px/1.5 var(--mono); padding:5px; }
+.analysis-section { border-top:1px solid var(--edge); padding-top:12px; }
+.analysis-head { display:flex; align-items:center; gap:10px; }
 .analysis-head .label { margin:0; }
 .analysis-meta,.analysis-count { color:var(--dim); font:10px/1.4 var(--mono); }
-.analysis-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+.analysis-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; margin-top:8px; }
 .metric { min-width:0; padding:9px 10px; border:1px solid var(--edge); border-radius:7px; background:var(--field); }
 .metric.hero { border-color:var(--brass); }
 .metric span,.metric small { display:block; color:var(--dim); font:10px/1.35 var(--mono); }
 .metric strong { display:block; margin:3px 0; font:600 15px/1.2 var(--mono); color:var(--paper); overflow-wrap:anywhere; }
 .metric.hero strong { color:var(--brass); }
-.candidate-head { display:flex; align-items:center; gap:8px; }
-.candidate-head .label { margin:0; }
-.candidate-head .analysis-count { margin-left:auto; }
-.candidate-table-wrap { overflow:auto; max-height:34vh; border:1px solid var(--edge); border-radius:7px; }
-.candidate-table { width:100%; border-collapse:collapse; font:10px/1.35 var(--mono); min-width:940px; }
+.candidate-head { display:flex; align-items:center; gap:8px; margin-top:11px; }
+.candidate-head .label { margin:0 auto 0 0; }
+.candidate-table-wrap { margin-top:6px; overflow:auto; max-height:36vh; border:1px solid var(--edge); border-radius:7px; }
+.candidate-table { width:100%; border-collapse:collapse; font:10px/1.35 var(--mono); min-width:980px; }
 .candidate-table th,.candidate-table td { padding:7px 8px; border-bottom:1px solid var(--edge); text-align:right; white-space:nowrap; }
 .candidate-table th { position:sticky; top:0; z-index:1; background:var(--rail); color:var(--dim); font-weight:500; }
 .candidate-table th:nth-child(2),.candidate-table td:nth-child(2),.candidate-table th:last-child,.candidate-table td:last-child { text-align:left; }
 .candidate-table tr.greedy-row { background:color-mix(in srgb,var(--brass) 10%,transparent); }
 .candidate-table small { color:var(--dim); }
-.reviewing-note { color:var(--brass); }
-.log .partial { color:var(--brass); }
-@media(max-width:1100px) {
+@media(max-width:1180px) {
   body[data-mode="self"] { overflow:auto; height:auto; }
   body[data-mode="self"] .stage { display:flex; flex-direction:column; overflow:visible; }
   body[data-mode="self"] .board-wrap { min-height:min(72vh,720px); }
   body[data-mode="self"] .rail { border-left:0; border-top:1px solid var(--edge); overflow:visible; }
-  .candidate-table-wrap { max-height:42vh; }
+  .candidate-table-wrap { max-height:48vh; }
 }
-@media(max-width:700px) {
-  .rail-top { grid-template-columns:1fr; }
+@media(max-width:760px) {
+  .self-upper { grid-template-columns:1fr; }
+  .kifu-panel { min-height:220px; max-height:42vh; }
   .analysis-summary { grid-template-columns:1fr 1fr; }
   body[data-mode="self"] .board-wrap { min-height:55vh; }
 }
