@@ -2,13 +2,13 @@ body[data-mode="self"] .stage { grid-template-columns:minmax(420px,1fr) minmax(6
 body[data-mode="self"] .rail { overflow:auto; gap:12px; }
 .self-upper { display:grid; grid-template-columns:minmax(260px,.95fr) minmax(300px,1.05fr); gap:12px; align-items:stretch; }
 .play-info { display:flex; flex-direction:column; gap:12px; min-width:0; }
-.kifu-panel { min-width:0; min-height:280px; display:flex; flex-direction:column; border:1px solid var(--edge); border-radius:8px; background:var(--field); overflow:hidden; }
-.kifu-head { display:flex; align-items:center; gap:8px; padding:9px 10px; border-bottom:1px solid var(--edge); }
+.kifu-panel { min-width:0; height:280px; min-height:280px; max-height:280px; display:flex; flex-direction:column; border:1px solid var(--edge); border-radius:8px; background:var(--field); overflow:hidden; }
+.kifu-head { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:9px 10px; border-bottom:1px solid var(--edge); }
 .kifu-head .label { margin:0 auto 0 0; }
 .review-nav { display:flex; align-items:center; gap:4px; }
 .review-nav button { font:10px var(--mono); min-width:30px; padding:4px 6px; }
 #kifu-pos { min-width:52px; text-align:center; font:10px var(--mono); color:var(--dim); }
-.kifu-list { flex:1; min-height:0; overflow:auto; padding:7px; display:flex; flex-direction:column; gap:5px; }
+.kifu-list { flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:7px; display:flex; flex-direction:column; gap:5px; scrollbar-gutter:stable; }
 .kifu-item { width:100%; display:grid; grid-template-columns:42px 26px minmax(0,1fr); align-items:start; gap:7px; text-align:left; padding:7px 8px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--paper); }
 .kifu-item:hover { border-color:var(--line); }
 .kifu-item.active { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 8%,transparent); }
@@ -35,8 +35,17 @@ body[data-mode="self"] .rail { overflow:auto; gap:12px; }
 .candidate-table th,.candidate-table td { padding:7px 8px; border-bottom:1px solid var(--edge); text-align:right; white-space:nowrap; }
 .candidate-table th { position:sticky; top:0; z-index:1; background:var(--rail); color:var(--dim); font-weight:500; }
 .candidate-table th:nth-child(2),.candidate-table td:nth-child(2),.candidate-table th:last-child,.candidate-table td:last-child { text-align:left; }
+.candidate-table tbody tr[data-action] { cursor:pointer; }
+.candidate-table tbody tr[data-action]:hover { background:color-mix(in srgb,var(--accent) 7%,transparent); }
 .candidate-table tr.greedy-row { background:color-mix(in srgb,var(--brass) 10%,transparent); }
+.candidate-table tr.selected-row { outline:1px solid var(--accent); outline-offset:-1px; background:color-mix(in srgb,var(--accent) 12%,transparent); }
 .candidate-table small { color:var(--dim); }
+.candidate-marker { position:absolute; z-index:6; border:2px solid var(--brass); border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; box-shadow:0 0 0 3px color-mix(in srgb,var(--brass) 18%,transparent); }
+.candidate-marker[hidden],.board-info-overlay[hidden] { display:none; }
+.board-info-overlay { position:absolute; z-index:8; pointer-events:none; transform:translate(14px,14px); min-width:160px; max-width:230px; padding:8px 9px; border:1px solid var(--edge); border-radius:7px; background:color-mix(in srgb,var(--rail) 94%,transparent); box-shadow:0 6px 20px rgba(0,0,0,.28); font:10px/1.45 var(--mono); color:var(--paper); }
+.board-info-overlay strong,.board-info-overlay span,.board-info-overlay small { display:block; }
+.board-info-overlay strong { color:var(--brass); margin-bottom:2px; }
+.board-info-overlay span,.board-info-overlay small { color:var(--dim); }
 @media(max-width:1180px) {
   body[data-mode="self"] { overflow:auto; height:auto; }
   body[data-mode="self"] .stage { display:flex; flex-direction:column; overflow:visible; }
@@ -46,7 +55,8 @@ body[data-mode="self"] .rail { overflow:auto; gap:12px; }
 }
 @media(max-width:760px) {
   .self-upper { grid-template-columns:1fr; }
-  .kifu-panel { min-height:220px; max-height:42vh; }
+  .kifu-panel { height:220px; min-height:220px; max-height:220px; }
   .analysis-summary { grid-template-columns:1fr 1fr; }
   body[data-mode="self"] .board-wrap { min-height:55vh; }
+  .board-info-overlay { display:none !important; }
 }
