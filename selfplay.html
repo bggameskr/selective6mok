@@ -48,7 +48,7 @@
     <div class="analysis-table-wrap">
       <table class="analysis-table">
         <thead><tr>
-          <th>#</th><th>행동</th><th>P순위</th><th>Policy</th><th>Logit</th><th>Child V</th><th>승률</th><th>P×V</th><th>보정</th><th>Greedy score</th><th>실제 후보</th><th>쉬움 T</th><th>보통 T</th><th>어려움 T</th>
+          <th>#</th><th>행동</th><th>P순위</th><th>Policy</th><th>Logit</th><th>Child V</th><th>승률</th><th>P×V</th><th>보정</th><th>Greedy score</th><th>후보 근거</th><th>쉬움 T</th><th>보통 T</th><th>어려움 T</th>
         </tr></thead>
         <tbody id="analysis-body"><tr><td colspan="14">모델 계산 중…</td></tr></tbody>
       </table>
@@ -73,8 +73,8 @@
   window.SIXMOK_MODEL_CORE = module.exports;
   ort.InferenceSession.create = window.__selfplayRealOrtCreate;
 </script>
-<script src="model-inspector.js?v=1"></script>
-<script src="selfplay-ui.js?v=1"></script>
+<script src="model-inspector.js?v=2"></script>
+<script src="selfplay-ui.js?v=2"></script>
 <script src="play.js?v=3"></script>
 </body>
 </html>
