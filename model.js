@@ -1,8 +1,10 @@
 /* 학습한 모델을 브라우저 게임에 붙인다.
 
    모든 난이도는 강제승/필수방어를 보존한 1-ply policy×value 평가를 공통으로 쓴다.
-   일반 상황에서는 후보 개수를 제한하지 않고 모든 합법 행동을 평가한다.
-   난이도 차이는 temperature와 가중치 컷오프로만 조절한다.
+   일반 상황에서는 root policy의 상대 컷오프를 통과한 착점을 후보로 삼고,
+   살아남은 후보만 child value를 평가한다. 후보 개수 자체에는 상한을 두지 않는다.
+   END_TURN은 policy 컷오프와 무관하게 항상 후보로 유지한다.
+   난이도 차이는 policy 컷오프, P×V 가중치 컷오프, temperature로 조절한다.
    빈 판 첫 착수는 T=1.5, 초반 10수는 기본 T×1.5를 적용한다.
    빈 판을 제외하면 난이도별 기준보다 낮은 P×V 가중치 후보는 샘플링에서 제외한다.
 
@@ -14,10 +16,11 @@
 (() => {
   'use strict';
 
-  const MODEL_URL = 'sixmok.onnx?v=6.2-full-candidates-1';
+  const MODEL_URL = 'sixmok.onnx?v=6.2-policy-cutoff-1';
   const MODEL_BOARD_SIZE = 19;
   const VALUE_WEIGHT_FLOOR = 1e-6;
   const DEFAULT_WEIGHT_CUTOFF_REL = 0.05;
+  const DEFAULT_POLICY_CUTOFF_REL = 0.03;
   const OPENING_TEMPERATURE = 1.5;
   const EARLY_ACTIONS = 10;
   const EARLY_TEMPERATURE_MULTIPLIER = 1.5;
@@ -199,6 +202,16 @@
     return base;
   }
 
+  function policyCutoffForLevel(level, weightCutoffRel = DEFAULT_WEIGHT_CUTOFF_REL) {
+    if (Number.isFinite(level && level.policyCutoffRel)) {
+      return Math.max(0, Math.min(1, level.policyCutoffRel));
+    }
+    if (weightCutoffRel <= 0.0200001) return 0.01;
+    if (weightCutoffRel <= 0.0500001) return 0.03;
+    if (weightCutoffRel >= 0.0999999) return 0.05;
+    return DEFAULT_POLICY_CUTOFF_REL;
+  }
+
   function applyWeightCutoff(game, indices, weightFn, cutoffRel = DEFAULT_WEIGHT_CUTOFF_REL) {
     if (game.stonesOnBoard === 0 || indices.length <= 1) return indices;
 
@@ -347,7 +360,7 @@
     });
   }
 
-  function candidateActions(game, probs, _width) {
+  function candidateActions(game, probs, policyCutoffRel = DEFAULT_POLICY_CUTOFF_REL) {
     const n = game.size;
     const endIndex = n * n;
     if (!game.canPlace()) return [endIndex];
@@ -367,17 +380,23 @@
       return forced.sort((a, b) => probs[b] - probs[a]);
     }
 
-    const all = [...empties, endIndex];
-    return all.sort((a, b) => {
-      if (a === endIndex) return 1;
-      if (b === endIndex) return -1;
-      return probs[b] - probs[a];
-    });
+    const relative = Number.isFinite(policyCutoffRel)
+      ? Math.max(0, Math.min(1, policyCutoffRel))
+      : DEFAULT_POLICY_CUTOFF_REL;
+    const bestPolicy = empties.length && Number.isFinite(probs[empties[0]])
+      ? Math.max(0, probs[empties[0]])
+      : 0;
+    const threshold = bestPolicy * relative;
+    const placements = bestPolicy > 0
+      ? empties.filter((i) => Number.isFinite(probs[i]) && probs[i] >= threshold)
+      : empties;
+
+    return [...placements, endIndex];
   }
 
-  async function pickWithLookahead(game, probs, _width, evaluateFn, temperature = 0, rng = Math.random, cutoffRel = DEFAULT_WEIGHT_CUTOFF_REL) {
+  async function pickWithLookahead(game, probs, policyCutoffRel, evaluateFn, temperature = 0, rng = Math.random, cutoffRel = DEFAULT_WEIGHT_CUTOFF_REL) {
     const rootColor = game.current;
-    const actions = candidateActions(game, probs, _width);
+    const actions = candidateActions(game, probs, policyCutoffRel);
     const children = actions.map((action) => playEvaluationAction(game, action));
 
     const scores = new Array(actions.length);
@@ -421,6 +440,7 @@
     const endIndex = n * n;
     const baseTemperature = Number.isFinite(level.temperature) ? level.temperature : 0.5;
     const cutoffRel = Number.isFinite(level.cutoffRel) ? level.cutoffRel : DEFAULT_WEIGHT_CUTOFF_REL;
+    const policyCutoffRel = policyCutoffForLevel(level, cutoffRel);
     const rng = options.rng || Math.random;
     const sim = game.clone();
     const moves = [];
@@ -438,7 +458,7 @@
       const probs = legalProbs(policy, sim, 0, stride);
       const temperature = effectiveTemperature(sim, baseTemperature);
       const index = await pickWithLookahead(
-        sim, probs, null, evaluateFn, temperature, rng, cutoffRel,
+        sim, probs, policyCutoffRel, evaluateFn, temperature, rng, cutoffRel,
       );
 
       if (index === endIndex || index < 0) break;
@@ -476,7 +496,7 @@
       oneTurnWinningWindows, oneTurnWinningSquares, oneTurnDefenseSquares,
       availablePlacements, legalProbs, findImmediateWin,
       valueWinProb, policyValueWeight, emptyEndStockMultiplier,
-      actionModifier, effectiveTemperature, applyWeightCutoff,
+      actionModifier, effectiveTemperature, policyCutoffForLevel, applyWeightCutoff,
       playEvaluationAction, encodeStateForModel,
     };
   }
