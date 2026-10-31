@@ -8,12 +8,12 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="play.css?v=3">
-<link rel="stylesheet" href="selfplay.css?v=1">
+<link rel="stylesheet" href="selfplay.css?v=3">
 </head>
 <body data-mode="self">
 <header class="topbar">
   <a class="nav" href="index.html">← 메인</a>
-  <span class="brand">육목</span><span class="tag">자율대국 · 모델 분석</span>
+  <span class="brand">육목</span><span class="tag">자율대국 · Greedy 모델 분석</span>
   <div class="controls">
     <span id="ai-badge" class="badge">모델 불러오는 중</span>
     <button id="new-game">새 판</button>
@@ -32,26 +32,22 @@
     <p id="hint" class="hint"></p>
 
     <div class="analysis-head">
-      <p class="label">모델 내부 분석</p><span class="spacer"></span>
-      <select id="analysis-sort" aria-label="후보 정렬">
-        <option value="greedy">Greedy score 순</option>
-        <option value="policy">Policy 순</option>
-        <option value="value">Child value 순</option>
-        <option value="easy">쉬움 T 확률 순</option>
-        <option value="normal">보통 T 확률 순</option>
-        <option value="hard">어려움 T 확률 순</option>
-      </select>
+      <p class="label">Greedy 모델 분석</p><span class="spacer"></span>
+      <div class="review-nav" aria-label="기보 탐색">
+        <button id="kifu-first" title="처음">|◀</button>
+        <button id="kifu-prev" title="이전">◀</button>
+        <span id="kifu-pos">0 / 0</span>
+        <button id="kifu-next" title="다음">▶</button>
+        <button id="kifu-last" title="최신">▶|</button>
+      </div>
     </div>
     <div id="analysis-meta" class="analysis-meta">모델 분석 준비 중…</div>
-    <div id="analysis-summary" class="analysis-summary"></div>
-    <div id="analysis-count" class="analysis-count"></div>
-    <div class="analysis-table-wrap">
-      <table class="analysis-table">
-        <thead><tr>
-          <th>#</th><th>행동</th><th>P순위</th><th>Policy</th><th>Logit</th><th>Child V</th><th>승률</th><th>P×V</th><th>보정</th><th>Greedy score</th><th>후보 근거</th><th>쉬움 T</th><th>보통 T</th><th>어려움 T</th>
-        </tr></thead>
-        <tbody id="analysis-body"><tr><td colspan="14">모델 계산 중…</td></tr></tbody>
-      </table>
+    <div class="analysis-layout">
+      <div id="analysis-summary" class="analysis-summary"></div>
+      <aside class="kifu-panel">
+        <div class="kifu-title">기보</div>
+        <div id="kifu-list" class="kifu-list"></div>
+      </aside>
     </div>
     <div class="log" id="log" aria-live="polite"></div>
   </aside>
@@ -73,8 +69,8 @@
   window.SIXMOK_MODEL_CORE = module.exports;
   ort.InferenceSession.create = window.__selfplayRealOrtCreate;
 </script>
-<script src="model-inspector.js?v=2"></script>
-<script src="selfplay-ui.js?v=2"></script>
-<script src="play.js?v=3"></script>
+<script src="model-inspector.js?v=3"></script>
+<script src="selfplay-ui.js?v=3"></script>
+<script src="selfplay-play.js?v=1"></script>
 </body>
 </html>
