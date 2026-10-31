@@ -2,11 +2,10 @@
   'use strict';
 
   const CORE = window.SIXMOK_MODEL_CORE;
-  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening35-t1-inspector';
+  const MODEL_URL = 'sixmok.onnx?v=6.2-policy20-opening35-t1-inspector-greedy';
   const MODEL_BOARD_SIZE = 19;
   const DEFAULT_POLICY_CUTOFF_REL = 0.20;
   const OPENING_POLICY_CUTOFF_REL = 0.35;
-  const OPENING_TEMPERATURE = 1.0;
 
   if (!CORE || typeof ort === 'undefined') {
     window.MODEL_STATUS = 'failed';
@@ -84,68 +83,15 @@
     return child.winner === rootColor ? 1 : -1;
   }
 
-  function levelDefs(game) {
-    const out = {};
-    for (const key of ['easy', 'normal', 'hard']) {
-      const src = (typeof AI_LEVELS !== 'undefined' && AI_LEVELS[key]) ? AI_LEVELS[key] : {};
-      out[key] = {
-        label: src.label || key,
-        baseTemperature: Number.isFinite(src.temperature) ? src.temperature : 0,
-        effectiveTemperature: game.stonesOnBoard === 0
-          ? OPENING_TEMPERATURE
-          : CORE.effectiveTemperature(game, src.temperature),
-        cutoffRel: Number.isFinite(src.cutoffRel) ? src.cutoffRel : 0,
-      };
-    }
-    return out;
-  }
-
-  function normalizedTemperatureWeights(rows, eligibleSet, temperature) {
-    const result = new Map();
-    if (!eligibleSet.size) return result;
-    if (!(temperature > 0)) {
-      let best = null;
-      for (const row of rows) {
-        if (!eligibleSet.has(row.action)) continue;
-        if (!best || row.selectionWeight > best.selectionWeight ||
-            (row.selectionWeight === best.selectionWeight && row.action < best.action)) best = row;
-      }
-      if (best) result.set(best.action, 1);
-      return result;
-    }
-    let total = 0;
-    for (const row of rows) {
-      if (!eligibleSet.has(row.action)) continue;
-      const scaled = Math.pow(Math.max(row.selectionWeight, 1e-12), 1 / temperature);
-      result.set(row.action, scaled);
-      total += scaled;
-    }
-    if (!(total > 0) || !Number.isFinite(total)) return result;
-    for (const [action, weight] of result) result.set(action, weight / total);
-    return result;
-  }
-
-  function cutoffSet(game, rows, cutoffRel) {
-    if (game.stonesOnBoard === 0 || rows.length <= 1) return new Set(rows.map((row) => row.action));
-    const winning = rows.filter((row) => row.childValue >= 1 - 1e-9);
-    if (winning.length) return new Set(winning.map((row) => row.action));
-    let best = 0;
-    for (const row of rows) best = Math.max(best, row.selectionWeight);
-    if (!(best > 0)) return new Set(rows.map((row) => row.action));
-    const threshold = best * Math.max(0, Math.min(1, cutoffRel));
-    const kept = rows.filter((row) => row.selectionWeight >= threshold);
-    return new Set((kept.length ? kept : rows).map((row) => row.action));
-  }
-
-  function openingCandidateActions(game, probs) {
+  function openingCandidates(game, probs) {
     const endIndex = game.size * game.size;
     if (!game.canPlace()) return [endIndex];
-    let bestPlacement = 0;
+    let best = 0;
     for (let i = 0; i < endIndex; i++) {
       if (game.board[i] !== EMPTY) continue;
-      bestPlacement = Math.max(bestPlacement, Number(probs[i]) || 0);
+      best = Math.max(best, Number(probs[i]) || 0);
     }
-    const threshold = bestPlacement * OPENING_POLICY_CUTOFF_REL;
+    const threshold = best * OPENING_POLICY_CUTOFF_REL;
     const out = [];
     for (let i = 0; i < endIndex; i++) {
       if (game.board[i] !== EMPTY) continue;
@@ -155,23 +101,19 @@
     return out;
   }
 
-  function classifyAction(game, action, immediateWin) {
-    const endIndex = game.size * game.size;
-    if (action === endIndex) return 'END_TURN';
-    if (action === immediateWin) return '즉시승 강제수';
-    if (game.stonesOnBoard === 0) return '오프닝 35% 통과';
-    return '실제 후보(정책/전술 필터 통과)';
+  function actionLabel(action, n) {
+    return action === n * n ? 'END_TURN' : `${Math.floor(action / n) + 1}·${action % n + 1}`;
   }
 
   async function analyzeUncached(game) {
     if (game.size !== MODEL_BOARD_SIZE) throw new Error(`모델은 ${MODEL_BOARD_SIZE}줄 판만 지원합니다.`);
-    const rootColor = game.current;
+
     const n = game.size;
     const endIndex = n * n;
-
+    const rootColor = game.current;
     const rootEval = await evaluate([game]);
-    const rootLogits = rootEval.policy;
-    const probs = CORE.legalProbs(rootLogits, game, 0, rootEval.stride);
+    const logits = rootEval.policy;
+    const probs = CORE.legalProbs(logits, game, 0, rootEval.stride);
     const rootValue = Number(rootEval.value[0]);
 
     const legalActions = [];
@@ -180,117 +122,101 @@
     }
     legalActions.push(endIndex);
 
-    const policyRank = new Map();
-    [...legalActions]
-      .sort((a, b) => ((Number(probs[b]) || 0) - (Number(probs[a]) || 0)) || (a - b))
-      .forEach((action, i) => policyRank.set(action, i + 1));
+    const policyOrder = [...legalActions]
+      .sort((a, b) => ((Number(probs[b]) || 0) - (Number(probs[a]) || 0)) || (a - b));
+    const policyRank = new Map(policyOrder.map((action, i) => [action, i + 1]));
 
     const immediateWin = game.canPlace() && game.stonesOnBoard > 0 ? CORE.findImmediateWin(game) : -1;
-    let candidateActions;
+    let candidates;
     let decisionPath;
+    let needsChildValue = true;
+
     if (!game.canPlace()) {
-      candidateActions = [endIndex];
+      candidates = [endIndex];
       decisionPath = '착수 불가 → END_TURN';
+      needsChildValue = false;
     } else if (game.stonesOnBoard === 0) {
-      candidateActions = openingCandidateActions(game, probs);
+      candidates = openingCandidates(game, probs);
       decisionPath = '오프닝 root policy';
+      needsChildValue = false;
     } else if (immediateWin >= 0) {
-      candidateActions = [immediateWin];
+      candidates = [immediateWin];
       decisionPath = '즉시승 강제수';
+      needsChildValue = false;
     } else {
-      candidateActions = CORE.candidateActions(game, probs, DEFAULT_POLICY_CUTOFF_REL);
+      candidates = CORE.candidateActions(game, probs, DEFAULT_POLICY_CUTOFF_REL);
       decisionPath = '1-ply P×V';
     }
 
-    const children = candidateActions.map((action) => CORE.playEvaluationAction(game, action));
-    const childValues = new Array(children.length);
-    const pending = [];
-    const pendingAt = [];
-    children.forEach((child, idx) => {
-      const terminal = rootPerspectiveTerminal(child, rootColor);
-      if (terminal !== null) childValues[idx] = terminal;
-      else { pending.push(child); pendingAt.push(idx); }
-    });
-    if (pending.length) {
-      const ev = await evaluate(pending);
-      pendingAt.forEach((idx, j) => {
-        const child = children[idx];
-        const v = Number(ev.value[j]);
-        childValues[idx] = child.current === rootColor ? v : -v;
+    const childValues = new Map();
+    if (immediateWin >= 0 && candidates.length === 1 && candidates[0] === immediateWin) {
+      childValues.set(immediateWin, 1);
+    } else if (needsChildValue) {
+      const children = candidates.map((action) => CORE.playEvaluationAction(game, action));
+      const pending = [];
+      const pendingActions = [];
+      children.forEach((child, idx) => {
+        const terminal = rootPerspectiveTerminal(child, rootColor);
+        if (terminal !== null) childValues.set(candidates[idx], terminal);
+        else {
+          pending.push(child);
+          pendingActions.push(candidates[idx]);
+        }
       });
-    }
-
-    const rows = candidateActions.map((action, idx) => {
-      const policy = Number(probs[action]) || 0;
-      const childValue = Number(childValues[idx]);
-      const winProb = CORE.valueWinProb(childValue);
-      const pv = CORE.policyValueWeight(policy, childValue);
-      const modifier = CORE.actionModifier(game, action);
-      const selectionWeight = game.stonesOnBoard === 0 ? policy * modifier : pv * modifier;
-      return {
-        action,
-        isEnd: action === endIndex,
-        row: action === endIndex ? null : Math.floor(action / n),
-        col: action === endIndex ? null : action % n,
-        rawLogit: Number(rootLogits[action]),
-        policy,
-        policyRank: policyRank.get(action) || null,
-        childValue,
-        winProb,
-        pv,
-        modifier,
-        selectionWeight,
-        actualCandidate: true,
-        reason: classifyAction(game, action, immediateWin),
-      };
-    });
-
-    const byScore = [...rows].sort((a, b) => (b.selectionWeight - a.selectionWeight) || (a.action - b.action));
-    byScore.forEach((row, i) => { row.greedyRankAll = i + 1; });
-    const greedyRow = byScore[0] || null;
-
-    const levels = levelDefs(game);
-    const levelSets = {};
-    const levelProbMaps = {};
-    for (const key of Object.keys(levels)) {
-      const eligible = cutoffSet(game, rows, levels[key].cutoffRel);
-      levelSets[key] = eligible;
-      levelProbMaps[key] = normalizedTemperatureWeights(rows, eligible, levels[key].effectiveTemperature);
-      levels[key].eligibleCount = eligible.size;
-    }
-
-    for (const row of rows) {
-      row.greedy = !!greedyRow && row.action === greedyRow.action;
-      row.levels = {};
-      for (const key of Object.keys(levels)) {
-        row.levels[key] = {
-          eligible: levelSets[key].has(row.action),
-          probability: levelProbMaps[key].get(row.action) || 0,
-        };
+      if (pending.length) {
+        const ev = await evaluate(pending);
+        pending.forEach((child, j) => {
+          const v = Number(ev.value[j]);
+          childValues.set(pendingActions[j], child.current === rootColor ? v : -v);
+        });
       }
     }
 
-    const rootPolicyEntropy = legalActions.reduce((sum, action) => {
-      const p = Number(probs[action]) || 0;
-      return p > 0 ? sum - p * Math.log(p) : sum;
-    }, 0);
+    const scored = candidates.map((action) => {
+      const policy = Number(probs[action]) || 0;
+      const modifier = CORE.actionModifier(game, action);
+      const childValue = childValues.has(action) ? Number(childValues.get(action)) : null;
+      const winProb = childValue === null ? null : CORE.valueWinProb(childValue);
+      const pv = childValue === null ? null : CORE.policyValueWeight(policy, childValue);
+      const selectionWeight = game.stonesOnBoard === 0
+        ? policy * modifier
+        : (childValue === null ? policy * modifier : pv * modifier);
+      return { action, policy, modifier, childValue, winProb, pv, selectionWeight };
+    });
+
+    scored.sort((a, b) => (b.selectionWeight - a.selectionWeight) || (a.action - b.action));
+    const greedy = scored[0] || { action: endIndex, policy: 0, modifier: 1, childValue: null, winProb: null, pv: null, selectionWeight: 0 };
+
+    let reason = 'policy 20% 후보 중 최고 P×V';
+    if (greedy.action === endIndex) reason = 'END_TURN';
+    if (game.stonesOnBoard === 0) reason = '오프닝 35% 후보 중 최고 policy';
+    if (immediateWin >= 0) reason = '즉시승 강제수';
+    if (!game.canPlace()) reason = '착수 불가';
 
     return {
       modelUrl: MODEL_URL,
       inputPlanes: cachedInputPlanes,
-      rootColor,
       rootValue,
       rootWinProb: CORE.valueWinProb(rootValue),
-      rootPolicyEntropy,
       legalCount: legalActions.length,
-      actualCandidateCount: rows.length,
-      evaluatedChildCount: rows.length,
+      candidateCount: candidates.length,
+      childEvaluatedCount: needsChildValue ? candidates.length : 0,
       decisionPath,
       policyCutoffRel: game.stonesOnBoard === 0 ? OPENING_POLICY_CUTOFF_REL : DEFAULT_POLICY_CUTOFF_REL,
-      greedyAction: greedyRow ? greedyRow.action : endIndex,
-      greedyMove: greedyRow && !greedyRow.isEnd ? [greedyRow.row, greedyRow.col] : END_TURN,
-      levels,
-      rows: byScore,
+      greedyMove: greedy.action === endIndex ? END_TURN : [Math.floor(greedy.action / n), greedy.action % n],
+      greedy: {
+        action: greedy.action,
+        label: actionLabel(greedy.action, n),
+        rawLogit: Number(logits[greedy.action]),
+        policy: greedy.policy,
+        policyRank: policyRank.get(greedy.action) || null,
+        childValue: greedy.childValue,
+        winProb: greedy.winProb,
+        pv: greedy.pv,
+        modifier: greedy.modifier,
+        score: greedy.selectionWeight,
+        reason,
+      },
     };
   }
 
