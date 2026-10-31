@@ -24,11 +24,11 @@
     node.innerHTML = `
       <div class="metric hero"><span>Greedy 추천</span><strong>${greedy ? actionLabel(greedy) : '—'}</strong><small>${data.decisionPath}</small></div>
       <div class="metric"><span>Root value</span><strong>${num(data.rootValue, 4)}</strong><small>승률 환산 ${pct(data.rootWinProb)}</small></div>
-      <div class="metric"><span>Policy entropy</span><strong>${num(data.rootPolicyEntropy, 4)}</strong><small>합법 ${data.legalCount} · 실제 후보 ${data.actualCandidateCount}</small></div>
+      <div class="metric"><span>Policy entropy</span><strong>${num(data.rootPolicyEntropy, 4)}</strong><small>합법 ${data.legalCount} · 평가 후보 ${data.actualCandidateCount}</small></div>
       ${levelCards}
     `;
     const meta = $('analysis-meta');
-    if (meta) meta.textContent = `${data.inputPlanes || '?'}-plane · policy cutoff ${pct(data.policyCutoffRel, 0)} · 난수 샘플링 없음`;
+    if (meta) meta.textContent = `${data.inputPlanes || '?'}-plane · policy cutoff ${pct(data.policyCutoffRel, 0)} · cutoff 통과 후보만 child 평가 · 난수 샘플링 없음`;
   }
 
   function sortedRows(data) {
@@ -53,11 +53,10 @@
     rows.forEach((row, idx) => {
       const tr = document.createElement('tr');
       if (row.greedy) tr.classList.add('greedy-row');
-      if (!row.actualCandidate) tr.classList.add('excluded-row');
       tr.innerHTML = `
         <td>${idx + 1}</td>
         <td><strong>${actionLabel(row)}</strong>${row.greedy ? '<span class="greedy-mark">G</span>' : ''}</td>
-        <td>${row.policyRank}</td>
+        <td>${row.policyRank ?? '—'}</td>
         <td>${pct(row.policy, 3)}</td>
         <td>${num(row.rawLogit, 3)}</td>
         <td>${num(row.childValue, 4)}</td>
@@ -65,7 +64,7 @@
         <td>${num(row.pv, 6)}</td>
         <td>${num(row.modifier, 4)}</td>
         <td>${num(row.selectionWeight, 6)}</td>
-        <td>${row.actualCandidate ? '포함' : '제외'}<br><small>${row.reason}</small></td>
+        <td>${row.reason}</td>
         <td class="temp ${row.levels.easy.eligible ? '' : 'off'}">${pct(row.levels.easy.probability, 3)}</td>
         <td class="temp ${row.levels.normal.eligible ? '' : 'off'}">${pct(row.levels.normal.probability, 3)}</td>
         <td class="temp ${row.levels.hard.eligible ? '' : 'off'}">${pct(row.levels.hard.probability, 3)}</td>
@@ -73,7 +72,7 @@
       body.appendChild(tr);
     });
     const count = $('analysis-count');
-    if (count) count.textContent = `${rows.length}개 합법 행동 전체 표시`;
+    if (count) count.textContent = `${rows.length}개 cutoff 후보 표시 · 전체 합법 ${data.legalCount}개 · child 평가 ${data.evaluatedChildCount ?? rows.length}개`;
   }
 
   function render(data) {
