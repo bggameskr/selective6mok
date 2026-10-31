@@ -125,28 +125,42 @@
     return result;
   }
 
-  function cutoffSet(game, rows, actualCandidateSet, cutoffRel) {
-    const candidateRows = rows.filter((row) => actualCandidateSet.has(row.action));
-    if (game.stonesOnBoard === 0 || candidateRows.length <= 1) return new Set(candidateRows.map((row) => row.action));
-    const winning = candidateRows.filter((row) => row.childValue >= 1 - 1e-9);
+  function cutoffSet(game, rows, cutoffRel) {
+    if (game.stonesOnBoard === 0 || rows.length <= 1) return new Set(rows.map((row) => row.action));
+    const winning = rows.filter((row) => row.childValue >= 1 - 1e-9);
     if (winning.length) return new Set(winning.map((row) => row.action));
     let best = 0;
-    for (const row of candidateRows) best = Math.max(best, row.selectionWeight);
-    if (!(best > 0)) return new Set(candidateRows.map((row) => row.action));
+    for (const row of rows) best = Math.max(best, row.selectionWeight);
+    if (!(best > 0)) return new Set(rows.map((row) => row.action));
     const threshold = best * Math.max(0, Math.min(1, cutoffRel));
-    const kept = candidateRows.filter((row) => row.selectionWeight >= threshold);
-    return new Set((kept.length ? kept : candidateRows).map((row) => row.action));
+    const kept = rows.filter((row) => row.selectionWeight >= threshold);
+    return new Set((kept.length ? kept : rows).map((row) => row.action));
   }
 
-  function classifyAction(game, action, data) {
+  function openingCandidateActions(game, probs) {
+    const endIndex = game.size * game.size;
+    if (!game.canPlace()) return [endIndex];
+    let bestPlacement = 0;
+    for (let i = 0; i < endIndex; i++) {
+      if (game.board[i] !== EMPTY) continue;
+      bestPlacement = Math.max(bestPlacement, Number(probs[i]) || 0);
+    }
+    const threshold = bestPlacement * OPENING_POLICY_CUTOFF_REL;
+    const out = [];
+    for (let i = 0; i < endIndex; i++) {
+      if (game.board[i] !== EMPTY) continue;
+      if ((Number(probs[i]) || 0) >= threshold) out.push(i);
+    }
+    out.push(endIndex);
+    return out;
+  }
+
+  function classifyAction(game, action, immediateWin) {
     const endIndex = game.size * game.size;
     if (action === endIndex) return 'END_TURN';
-    if (data.immediateWin === action) return '즉시승 강제수';
-    if (data.ownWinning.has(action)) return '한 턴 승리 후보';
-    if (data.defenses.has(action)) return '필수 방어';
-    if (data.foeWinning.has(action)) return '상대 승리점';
-    if (game.stonesOnBoard === 0) return data.openingCandidates.has(action) ? '오프닝 35% 통과' : '오프닝 컷 제외';
-    return data.actualCandidates.has(action) ? 'policy 20% 통과' : 'policy 컷 제외';
+    if (action === immediateWin) return '즉시승 강제수';
+    if (game.stonesOnBoard === 0) return '오프닝 35% 통과';
+    return '실제 후보(정책/전술 필터 통과)';
   }
 
   async function analyzeUncached(game) {
@@ -154,6 +168,7 @@
     const rootColor = game.current;
     const n = game.size;
     const endIndex = n * n;
+
     const rootEval = await evaluate([game]);
     const rootLogits = rootEval.policy;
     const probs = CORE.legalProbs(rootLogits, game, 0, rootEval.stride);
@@ -165,7 +180,29 @@
     }
     legalActions.push(endIndex);
 
-    const children = legalActions.map((action) => CORE.playEvaluationAction(game, action));
+    const policyRank = new Map();
+    [...legalActions]
+      .sort((a, b) => ((Number(probs[b]) || 0) - (Number(probs[a]) || 0)) || (a - b))
+      .forEach((action, i) => policyRank.set(action, i + 1));
+
+    const immediateWin = game.canPlace() && game.stonesOnBoard > 0 ? CORE.findImmediateWin(game) : -1;
+    let candidateActions;
+    let decisionPath;
+    if (!game.canPlace()) {
+      candidateActions = [endIndex];
+      decisionPath = '착수 불가 → END_TURN';
+    } else if (game.stonesOnBoard === 0) {
+      candidateActions = openingCandidateActions(game, probs);
+      decisionPath = '오프닝 root policy';
+    } else if (immediateWin >= 0) {
+      candidateActions = [immediateWin];
+      decisionPath = '즉시승 강제수';
+    } else {
+      candidateActions = CORE.candidateActions(game, probs, DEFAULT_POLICY_CUTOFF_REL);
+      decisionPath = '1-ply P×V';
+    }
+
+    const children = candidateActions.map((action) => CORE.playEvaluationAction(game, action));
     const childValues = new Array(children.length);
     const pending = [];
     const pendingAt = [];
@@ -183,29 +220,7 @@
       });
     }
 
-    let bestPlacementPolicy = 0;
-    for (let i = 0; i < endIndex; i++) {
-      if (game.board[i] === EMPTY) bestPlacementPolicy = Math.max(bestPlacementPolicy, Number(probs[i]) || 0);
-    }
-    const openingThreshold = bestPlacementPolicy * OPENING_POLICY_CUTOFF_REL;
-    const openingCandidates = new Set([endIndex]);
-    if (game.canPlace()) {
-      for (let i = 0; i < endIndex; i++) {
-        if (game.board[i] === EMPTY && (Number(probs[i]) || 0) >= openingThreshold) openingCandidates.add(i);
-      }
-    }
-
-    const actualCandidateArray = game.stonesOnBoard === 0
-      ? [...openingCandidates]
-      : CORE.candidateActions(game, probs, DEFAULT_POLICY_CUTOFF_REL);
-    const actualCandidates = new Set(actualCandidateArray);
-    const ownWinning = new Set(CORE.oneTurnWinningSquares(game, game.current));
-    const foeColor = game.current === BLACK ? WHITE : BLACK;
-    const foeWinning = new Set(CORE.oneTurnWinningSquares(game, foeColor));
-    const defenses = new Set(foeWinning.size ? CORE.oneTurnDefenseSquares(game, foeColor) : []);
-    const immediateWin = CORE.findImmediateWin(game);
-
-    const rows = legalActions.map((action, idx) => {
+    const rows = candidateActions.map((action, idx) => {
       const policy = Number(probs[action]) || 0;
       const childValue = Number(childValues[idx]);
       const winProb = CORE.valueWinProb(childValue);
@@ -219,46 +234,32 @@
         col: action === endIndex ? null : action % n,
         rawLogit: Number(rootLogits[action]),
         policy,
+        policyRank: policyRank.get(action) || null,
         childValue,
         winProb,
         pv,
         modifier,
         selectionWeight,
-        actualCandidate: actualCandidates.has(action),
+        actualCandidate: true,
+        reason: classifyAction(game, action, immediateWin),
       };
     });
 
-    const byPolicy = [...rows].sort((a, b) => (b.policy - a.policy) || (a.action - b.action));
-    byPolicy.forEach((row, i) => { row.policyRank = i + 1; });
     const byScore = [...rows].sort((a, b) => (b.selectionWeight - a.selectionWeight) || (a.action - b.action));
     byScore.forEach((row, i) => { row.greedyRankAll = i + 1; });
-
-    let greedyRow = null;
-    let decisionPath = game.stonesOnBoard === 0 ? '오프닝 root policy' : '1-ply P×V';
-    if (!game.canPlace()) {
-      greedyRow = rows.find((row) => row.action === endIndex) || null;
-      decisionPath = '착수 불가 → END_TURN';
-    } else if (immediateWin >= 0) {
-      greedyRow = rows.find((row) => row.action === immediateWin) || null;
-      decisionPath = '즉시승 강제수';
-    } else {
-      const pool = rows.filter((row) => actualCandidates.has(row.action));
-      greedyRow = [...pool].sort((a, b) => (b.selectionWeight - a.selectionWeight) || (a.action - b.action))[0] || null;
-    }
+    const greedyRow = byScore[0] || null;
 
     const levels = levelDefs(game);
     const levelSets = {};
     const levelProbMaps = {};
     for (const key of Object.keys(levels)) {
-      const eligible = cutoffSet(game, rows, actualCandidates, levels[key].cutoffRel);
+      const eligible = cutoffSet(game, rows, levels[key].cutoffRel);
       levelSets[key] = eligible;
       levelProbMaps[key] = normalizedTemperatureWeights(rows, eligible, levels[key].effectiveTemperature);
       levels[key].eligibleCount = eligible.size;
     }
 
-    const classData = { immediateWin, ownWinning, foeWinning, defenses, openingCandidates, actualCandidates };
     for (const row of rows) {
-      row.reason = classifyAction(game, row.action, classData);
       row.greedy = !!greedyRow && row.action === greedyRow.action;
       row.levels = {};
       for (const key of Object.keys(levels)) {
@@ -269,16 +270,21 @@
       }
     }
 
-    const rootPolicyEntropy = rows.reduce((sum, row) => row.policy > 0 ? sum - row.policy * Math.log(row.policy) : sum, 0);
-    const result = {
+    const rootPolicyEntropy = legalActions.reduce((sum, action) => {
+      const p = Number(probs[action]) || 0;
+      return p > 0 ? sum - p * Math.log(p) : sum;
+    }, 0);
+
+    return {
       modelUrl: MODEL_URL,
       inputPlanes: cachedInputPlanes,
       rootColor,
       rootValue,
       rootWinProb: CORE.valueWinProb(rootValue),
       rootPolicyEntropy,
-      legalCount: rows.length,
-      actualCandidateCount: actualCandidates.size,
+      legalCount: legalActions.length,
+      actualCandidateCount: rows.length,
+      evaluatedChildCount: rows.length,
       decisionPath,
       policyCutoffRel: game.stonesOnBoard === 0 ? OPENING_POLICY_CUTOFF_REL : DEFAULT_POLICY_CUTOFF_REL,
       greedyAction: greedyRow ? greedyRow.action : endIndex,
@@ -286,7 +292,6 @@
       levels,
       rows: byScore,
     };
-    return result;
   }
 
   async function analyze(game) {
