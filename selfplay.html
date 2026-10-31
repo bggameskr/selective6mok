@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>육목 — 자율대국</title>
+<title>육목 — 자율대국 모델 분석</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="play.css?v=2">
+<link rel="stylesheet" href="play.css?v=3">
+<link rel="stylesheet" href="selfplay.css?v=1">
 </head>
 <body data-mode="self">
 <header class="topbar">
   <a class="nav" href="index.html">← 메인</a>
-  <span class="brand">육목</span><span class="tag">자율대국 · 모델 추천수</span>
+  <span class="brand">육목</span><span class="tag">자율대국 · 모델 분석</span>
   <div class="controls">
     <span id="ai-badge" class="badge">모델 불러오는 중</span>
-    <select id="level" aria-label="추천 난이도"><option value="easy">쉬움 추천</option><option value="normal" selected>보통 추천</option><option value="hard">어려움 추천</option></select>
     <button id="new-game">새 판</button>
   </div>
 </header>
@@ -30,13 +30,51 @@
     <div id="recommend" class="recommend"></div>
     <div class="actions"><button id="undo">무르기</button><button class="primary" id="end-turn">턴 마치기</button></div>
     <p id="hint" class="hint"></p>
-    <div id="log" class="log" aria-live="polite"></div>
+
+    <div class="analysis-head">
+      <p class="label">모델 내부 분석</p><span class="spacer"></span>
+      <select id="analysis-sort" aria-label="후보 정렬">
+        <option value="greedy">Greedy score 순</option>
+        <option value="policy">Policy 순</option>
+        <option value="value">Child value 순</option>
+        <option value="easy">쉬움 T 확률 순</option>
+        <option value="normal">보통 T 확률 순</option>
+        <option value="hard">어려움 T 확률 순</option>
+      </select>
+    </div>
+    <div id="analysis-meta" class="analysis-meta">모델 분석 준비 중…</div>
+    <div id="analysis-summary" class="analysis-summary"></div>
+    <div id="analysis-count" class="analysis-count"></div>
+    <div class="analysis-table-wrap">
+      <table class="analysis-table">
+        <thead><tr>
+          <th>#</th><th>행동</th><th>P순위</th><th>Policy</th><th>Logit</th><th>Child V</th><th>승률</th><th>P×V</th><th>보정</th><th>Greedy score</th><th>실제 후보</th><th>쉬움 T</th><th>보통 T</th><th>어려움 T</th>
+        </tr></thead>
+        <tbody id="analysis-body"><tr><td colspan="14">모델 계산 중…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="log" id="log" aria-live="polite"></div>
   </aside>
 </main>
 <script src="engine.js?v=start-stones-1-2"></script>
-<script>window.AI_LEVEL = () => AI_LEVELS[document.getElementById('level')?.value || 'normal'] || AI_LEVELS.normal;</script>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
-<script src="model.js?v=opening35"></script>
-<script src="play.js?v=2"></script>
+<script>
+  window.__selfplayRealOrtCreate = ort.InferenceSession.create.bind(ort.InferenceSession);
+  ort.InferenceSession.create = (source, options) => {
+    if (typeof source === 'string' && source.startsWith('sixmok.onnx')) {
+      return Promise.resolve({ run: async () => { throw new Error('selfplay core-only session'); } });
+    }
+    return window.__selfplayRealOrtCreate(source, options);
+  };
+  var module = { exports: {} };
+</script>
+<script src="model.js?v=opening35-core-3"></script>
+<script>
+  window.SIXMOK_MODEL_CORE = module.exports;
+  ort.InferenceSession.create = window.__selfplayRealOrtCreate;
+</script>
+<script src="model-inspector.js?v=1"></script>
+<script src="selfplay-ui.js?v=1"></script>
+<script src="play.js?v=3"></script>
 </body>
 </html>
